@@ -134,11 +134,35 @@ app.post('/api/generate', async (req, res) => {
 
         let speedMultiplier = 1.0;
         let wantsSubtitles = false;
+        let printPartTitle = false;
+        
+        let subtitleFont = "Impact";
+        let assColor = "&H0000FFFF"; 
+        let isBold = "1";
+        let rawColorName = "White"; 
 
         if (proSettings && !proSettings.autoPilot) {
             if (proSettings.pacing === "Fast") speedMultiplier = 1.1;
             if (proSettings.pacing === "VeryFast") speedMultiplier = 1.25;
             wantsSubtitles = proSettings.subtitles;
+            printPartTitle = proSettings.printPartTitle; 
+            
+            if (proSettings.subtitleFont) {
+                subtitleFont = proSettings.subtitleFont.replace(" Bold", "");
+                isBold = (subtitleFont === "Impact" || proSettings.subtitleFont.includes("Bold") || subtitleFont === "Comic Sans MS") ? "1" : "0";
+            }
+            
+            const colorMap = {
+                "White": "&H00FFFFFF",
+                "Yellow": "&H0000FFFF",
+                "Red": "&H000000FF",
+                "Cyan": "&H00FFFF00",
+                "Green": "&H0000FF00"
+            };
+            if (proSettings.subtitleColor && colorMap[proSettings.subtitleColor]) {
+                assColor = colorMap[proSettings.subtitleColor];
+                rawColorName = proSettings.subtitleColor; 
+            }
         }
 
         // ==========================================
@@ -191,19 +215,34 @@ app.post('/api/generate', async (req, res) => {
                             await new Promise((resolve, reject) => {
                                 let lastReportedPercent = 0;
                                 let filterGraph = [
-                                    '[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:20[bg]',
-                                    '[0:v]scale=1080:-1[fg]',
+                                    '[0:v]fps=30,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:20[bg]',
+                                    '[0:v]fps=30,scale=1080:-1[fg]',
                                     '[bg][fg]overlay=(W-w)/2:(H-h)/2[outv]'
                                 ];
-                                let outputOptions = ['-c:v libx264', '-preset fast'];
+                                
+                                let outputOptions = ['-c:v libx264', '-preset fast', '-async 1', '-vsync 1'];
+                                let currentVOut = 'outv';
+
+                                if (printPartTitle) {
+                                    sendUpdate(`   🔤 Burning in Static Watermark: Title (Top) & Part ${i} (Bottom)...`);
+                                    
+                                    const safeTitleText = originalTitle.replace(/['":;,\\]/g, '').trim();
+                                    const colorMapDraw = { "White": "white", "Yellow": "yellow", "Red": "red", "Cyan": "cyan", "Green": "green" };
+                                    const drawColor = colorMapDraw[rawColorName] || "white";
+
+                                    const drawFilter = `[${currentVOut}]drawtext=text='${safeTitleText}':fontcolor=${drawColor}:fontsize=45:borderw=4:bordercolor=black:x=(w-text_w)/2:y=150,drawtext=text='Part ${i}':fontcolor=${drawColor}:fontsize=60:borderw=4:bordercolor=black:x=(w-text_w)/2:y=h-250[titlev]`;
+                                    
+                                    filterGraph.push(drawFilter);
+                                    currentVOut = 'titlev';
+                                }
 
                                 if (speedMultiplier !== 1.0) {
                                     const pts = (1 / speedMultiplier).toFixed(4);
-                                    filterGraph.push(`[outv]setpts=${pts}*PTS[finalv]`);
+                                    filterGraph.push(`[${currentVOut}]setpts=${pts}*PTS[finalv]`);
                                     filterGraph.push(`[0:a]atempo=${speedMultiplier}[finala]`);
                                     outputOptions.push('-map [finalv]', '-map [finala]', '-c:a aac');
                                 } else {
-                                    outputOptions.push('-map [outv]', '-map 0:a', '-c:a copy');
+                                    outputOptions.push(`-map [${currentVOut}]`, '-map 0:a', '-c:a aac');
                                 }
 
                                 ffmpeg(rawPartPath)
@@ -250,14 +289,22 @@ app.post('/api/generate', async (req, res) => {
         }
 
         // ==========================================
-        // OPTION 1: SHORT VIDEO
+        // OPTION 1: SHORT VIDEO (KARAOKE HIGHLIGHT ENGINE)
         // ==========================================
         if (mode === 'short') {
-            const audioPath = path.join(jobFolder, 'audio.mp3');
-            sendUpdate(`\n[3/7] 🎵 Extracting Audio for AI Transcription...`);
+            const audioPath = path.join(jobFolder, 'audio.m4a');
+            sendUpdate(`\n[3/7] 🎵 Extracting & Crushing Audio to prevent AI size limits...`);
 
-            ffmpeg(outputPath).output(audioPath).noVideo().audioCodec('libmp3lame').on('end', async () => {
-                sendUpdate(`✅ Audio Extracted!`);
+            ffmpeg(outputPath)
+                .output(audioPath)
+                .noVideo()
+                .audioCodec('aac')
+                .audioChannels(1)
+                .audioFrequency(16000)
+                .audioBitrate('16k')
+                .setDuration(7200) 
+                .on('end', async () => {
+                sendUpdate(`✅ Audio Extracted safely under 25MB limit!`);
                 
                 try {
                     sendUpdate(`\n[4/7] 🧠 AI is transcribing the audio at millisecond level...`);
@@ -329,9 +376,18 @@ Output ONLY a flat JSON object: {"start_time": 10.5, "end_time": 25.2}. If total
                     const clipSegments = safeSegments.filter(s => s.end >= start && s.start <= end);
                     const clipText = clipSegments.map(s => s.text).join(' ');
 
-                    sendUpdate(`\n[6/7] 📈 BRAIN 2 (70B SEO Model): Analyzing script for viral hashtags...`);
+                    sendUpdate(`\n[6/7] 📈 BRAIN 2 (70B SEO Model): Generating viral TikTok title and hashtags...`);
 
-                    let seoPrompt = `You are a Gen-Z TikTok and YouTube Shorts viral SEO marketer. Context:\n- Title: "${originalTitle}"\n- Channel: "${originalChannel}"\nScript:\n${clipText}\nOUTPUT ONLY JSON: {"title": "lowercase title 💀", "hashtags": "#fyp #viral"}`;
+                    let seoPrompt = `You are a Gen-Z TikTok and YouTube Shorts viral SEO marketer. Create a brand NEW, short, clickbaity TikTok caption based ONLY on the specific 'Clip Script' below. DO NOT just copy the Original Title. Make it native to TikTok (lowercase, use emojis like 💀😭🔥).
+                    
+Original Video Info:
+- Original Title: "${originalTitle}"
+- Channel: "${originalChannel}"
+
+Clip Script (What is actually said in this short):
+"${clipText}"
+
+OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #viral #specifictag"}`;
 
                     let title = "viral clip 💀";
                     let hashtags = "#fyp #viral";
@@ -341,7 +397,7 @@ Output ONLY a flat JSON object: {"start_time": 10.5, "end_time": 25.2}. If total
                             model: "llama-3.3-70b-versatile",
                             messages: [ 
                                 { role: "system", content: seoPrompt },
-                                { role: "user", content: `Generate title and hashtags for this script:\n\n${clipText}` } 
+                                { role: "user", content: `Generate a brand NEW title and hashtags for this script:\n\n${clipText}` } 
                             ],
                             response_format: { type: "json_object" }
                         });
@@ -354,12 +410,11 @@ Output ONLY a flat JSON object: {"start_time": 10.5, "end_time": 25.2}. If total
                     sendUpdate(`📝 TikTok Title: ${title}`);
                     sendUpdate(`🏷️ Tags:  ${hashtags}`);
 
-                    // 🌟 BUG FIX 1: RESTORED THE METADATA SAVER 🌟
                     const metadataPath = path.join(jobFolder, 'metadata.txt');
                     fs.writeFileSync(metadataPath, `Original Video: ${originalTitle}\nChannel: ${originalChannel}\nTikTok Title: ${title}\nHashtags: ${hashtags}\nClip Duration: ${duration.toFixed(1)} seconds`);
 
                     // ==========================================================
-                    // 🌟 STEP 3: THE SMART SUBTITLE ENGINE (SILENCE DETECTOR) 🌟
+                    // 🌟 STEP 3: HORMZI-STYLE WORD HIGHLIGHT ENGINE 🌟
                     // ==========================================================
                     let srtPath = "";
                     
@@ -367,25 +422,27 @@ Output ONLY a flat JSON object: {"start_time": 10.5, "end_time": 25.2}. If total
                         let srtContent = '';
                         let subIndex = 1;
 
+                        // 🌟 SETUP COLORS FOR THE ASS OVERRIDE TAGS 🌟
+                        let shortBaseColorCode = "FFFFFF"; // Base text is always White
+                        let shortHighlightColorCode = assColor.substring(4); // Strips the "&H00" to get standard 6-char Hex
+                        if (shortHighlightColorCode === "FFFFFF") shortHighlightColorCode = "00FFFF"; // If they chose White, highlight Yellow
+
                         if (transcription.words && transcription.words.length > 0) {
-                            sendUpdate(`   🔤 Building Smart Subtitles with Silence Detection...`);
+                            sendUpdate(`   🔤 Building CapCut-Style Highlighted Subtitles...`);
                             
                             const validWords = transcription.words.filter(w => w.start >= start && w.end <= end);
                             
                             let subtitleChunks = [];
                             let currentChunk = [];
 
-                            // 🌟 BUG FIX 2: THE SILENCE DETECTOR 🌟
                             for (let i = 0; i < validWords.length; i++) {
                                 const wordObj = validWords[i];
-                                
                                 if (currentChunk.length === 0) {
                                     currentChunk.push(wordObj);
                                 } else {
                                     const prevWord = currentChunk[currentChunk.length - 1];
                                     const gap = wordObj.start - prevWord.end;
                                     
-                                    // If there is a silence longer than 0.4s, OR we hit 3 words, break the chunk!
                                     if (gap > 0.4 || currentChunk.length >= 3) {
                                         subtitleChunks.push(currentChunk);
                                         currentChunk = [wordObj];
@@ -394,19 +451,36 @@ Output ONLY a flat JSON object: {"start_time": 10.5, "end_time": 25.2}. If total
                                     }
                                 }
                             }
-                            // Push the last chunk
                             if (currentChunk.length > 0) subtitleChunks.push(currentChunk);
 
-                            // Write out the precise chunks
+                            // 🌟 THE HACKER LOOP: GENERATING OVERLAPPING HIGHLIGHTS 🌟
                             subtitleChunks.forEach(chunk => {
-                                let chunkStart = Math.max(0, chunk[0].start - start);
-                                let chunkEnd = chunk[chunk.length - 1].end - start;
-                                let text = chunk.map(w => w.word.trim()).join(' ');
-                                
-                                if (chunkEnd > chunkStart && text.length > 0) {
-                                    srtContent += `${subIndex++}\n`;
-                                    srtContent += `${formatSrtTime(chunkStart)} --> ${formatSrtTime(chunkEnd)}\n`;
-                                    srtContent += `${text}\n\n`;
+                                for (let i = 0; i < chunk.length; i++) {
+                                    const currentWord = chunk[i];
+                                    let wordStart = Math.max(0, currentWord.start - start);
+                                    let wordEnd;
+                                    
+                                    // Highlight lasts until the next word starts!
+                                    if (i < chunk.length - 1) {
+                                        wordEnd = Math.max(0, chunk[i + 1].start - start);
+                                    } else {
+                                        wordEnd = Math.max(0, currentWord.end - start);
+                                    }
+
+                                    if (wordEnd > wordStart) {
+                                        let text = chunk.map((w, idx) => {
+                                            let cleanWord = w.word.trim();
+                                            // Inject ASS Color Override to highlight ONLY the active word!
+                                            if (idx === i) {
+                                                return `{\\c&H${shortHighlightColorCode}&}${cleanWord}{\\c&H${shortBaseColorCode}&}`;
+                                            }
+                                            return cleanWord;
+                                        }).join(' ');
+
+                                        srtContent += `${subIndex++}\n`;
+                                        srtContent += `${formatSrtTime(wordStart)} --> ${formatSrtTime(wordEnd)}\n`;
+                                        srtContent += `${text}\n\n`;
+                                    }
                                 }
                             });
                         } else if (clipSegments.length > 0) {
@@ -447,13 +521,30 @@ Output ONLY a flat JSON object: {"start_time": 10.5, "end_time": 25.2}. If total
                             if (currentChunk.length > 0) subtitleChunks.push(currentChunk);
 
                             subtitleChunks.forEach(chunk => {
-                                let chunkStart = Math.max(0, chunk[0].start - start);
-                                let chunkEnd = chunk[chunk.length - 1].end - start;
-                                let text = chunk.map(w => w.word.trim()).join(' ');
-                                if (chunkEnd > chunkStart && text.length > 0) {
-                                    srtContent += `${subIndex++}\n`;
-                                    srtContent += `${formatSrtTime(chunkStart)} --> ${formatSrtTime(chunkEnd)}\n`;
-                                    srtContent += `${text}\n\n`;
+                                for (let i = 0; i < chunk.length; i++) {
+                                    const currentWord = chunk[i];
+                                    let wordStart = Math.max(0, currentWord.start - start);
+                                    let wordEnd;
+                                    
+                                    if (i < chunk.length - 1) {
+                                        wordEnd = Math.max(0, chunk[i + 1].start - start);
+                                    } else {
+                                        wordEnd = Math.max(0, currentWord.end - start);
+                                    }
+
+                                    if (wordEnd > wordStart) {
+                                        let text = chunk.map((w, idx) => {
+                                            let cleanWord = w.word.trim();
+                                            if (idx === i) {
+                                                return `{\\c&H${shortHighlightColorCode}&}${cleanWord}{\\c&H${shortBaseColorCode}&}`;
+                                            }
+                                            return cleanWord;
+                                        }).join(' ');
+
+                                        srtContent += `${subIndex++}\n`;
+                                        srtContent += `${formatSrtTime(wordStart)} --> ${formatSrtTime(wordEnd)}\n`;
+                                        srtContent += `${text}\n\n`;
+                                    }
                                 }
                             });
                         }
@@ -464,19 +555,22 @@ Output ONLY a flat JSON object: {"start_time": 10.5, "end_time": 25.2}. If total
                         }
                     }
 
-                    // 🌟 DYNAMIC FFmpeg FILTERS 🌟
-                    const vFilters = [{ filter: 'crop', options: 'ih*(9/16):ih' }];
+                    const vFilters = [
+                        { filter: 'fps', options: '30' },
+                        { filter: 'crop', options: 'ih*(9/16):ih' }
+                    ];
                     const aFilters = [];
 
                     if (wantsSubtitles && srtPath) {
                         const safeSrtPath = path.relative(process.cwd(), srtPath).replace(/\\/g, '/');
-                        const style = "Fontname=Impact,Fontsize=22,PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2.5,Shadow=1,Alignment=2,MarginV=60";
+                        // 🌟 Fontsize increased to 45, Outline to 3.5, and MarginV to 80 so it's BIG and clear! 🌟
+                        const style = `Fontname=${subtitleFont},Fontsize=45,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=3.5,Shadow=1,Alignment=2,MarginV=80,Bold=${isBold}`;
                         
                         vFilters.push({ 
                             filter: 'subtitles', 
                             options: `${safeSrtPath}:force_style='${style}'` 
                         });
-                        sendUpdate(`   🔤 Burning Bold Yellow Subtitles onto video...`);
+                        sendUpdate(`   🔤 Burning CapCut-style bouncing subtitles onto video...`);
                     }
 
                     if (speedMultiplier !== 1.0) {
@@ -486,14 +580,21 @@ Output ONLY a flat JSON object: {"start_time": 10.5, "end_time": 25.2}. If total
                         sendUpdate(`   ⏩ Speeding up video to ${speedMultiplier}x Pacing...`);
                     }
 
-                    sendUpdate(`\n[7/7] ✂️ Cutting & Rendering Final Vertical Video...`);
+                    sendUpdate(`\n[7/7] ✂️ Cutting & Rendering Final Vertical Video (Iron Grip Sync)...`);
 
                     const finalVideoPath = path.join(jobFolder, 'final_ai_short.mp4');
 
                     const command = ffmpeg(outputPath)
                         .setStartTime(start)
                         .setDuration(duration)
-                        .videoFilters(vFilters);
+                        .videoFilters(vFilters)
+                        .outputOptions([
+                            '-async 1',       
+                            '-vsync 1',       
+                            '-c:v libx264',   
+                            '-preset fast',
+                            '-c:a aac'        
+                        ]);
 
                     if (aFilters.length > 0) {
                         command.audioFilters(aFilters);

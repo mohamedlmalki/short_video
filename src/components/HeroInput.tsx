@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Settings, Wand2, Type, Scissors, Music, FastForward, ChevronDown, ChevronUp, Loader2, Link as LinkIcon, Sparkles, AlignBottom } from "lucide-react";
+import { Settings, Wand2, Type, Scissors, Music, FastForward, ChevronDown, ChevronUp, Loader2, Link as LinkIcon, Sparkles, AlignLeft } from "lucide-react";
 
 const HeroInput = () => {
   // 🌟 MAIN INPUT STATES 🌟
@@ -19,13 +19,16 @@ const HeroInput = () => {
   const [removeSilence, setRemoveSilence] = useState(true);
   const [bgMusic, setBgMusic] = useState("None");
   const [pacing, setPacing] = useState("Normal");
+  
+  // 🌟 SPLIT MODE SPECIFIC STATE 🌟
+  const [printPartTitle, setPrintPartTitle] = useState(true);
 
-  // 🌟 NEW: SUBTITLE STYLE STATES 🌟
+  // 🌟 SUBTITLE STYLE STATES 🌟
   const [subtitleFont, setSubtitleFont] = useState("Impact");
   const [subtitleColor, setSubtitleColor] = useState("White");
 
   // Preview colors for the dropdown label badges
-  const colorPreviews = {
+  const colorPreviews: Record<string, { text: string; outline: string; label: string }> = {
     White:  { text: "#ffffff", outline: "#000000", label: "White + Black outline" },
     Yellow: { text: "#ffff00", outline: "#000000", label: "Yellow + Black outline" },
     Red:    { text: "#ff3b3b", outline: "#000000", label: "Red + Black outline" },
@@ -64,9 +67,9 @@ const HeroInput = () => {
             removeSilence,
             bgMusic,
             pacing,
-            // 🌟 NEW: pass subtitle style to backend 🌟
             subtitleFont,
             subtitleColor,
+            printPartTitle, 
           },
         }),
       });
@@ -136,6 +139,32 @@ const HeroInput = () => {
         </button>
       </div>
 
+      {/* 🌟 RESTORED: SPLIT MODE INPUTS (ONLY SHOWS IN SPLIT MODE) 🌟 */}
+      {mode === "split" && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 p-4 bg-blue-50/50 border border-blue-100 rounded-xl animate-in fade-in slide-in-from-top-2">
+          <div>
+            <label className="block text-xs font-bold text-gray-700 uppercase mb-2">Seconds per Part</label>
+            <input
+              type="number"
+              value={chunkDuration}
+              onChange={(e) => setChunkDuration(e.target.value)}
+              placeholder="e.g. 60"
+              className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-gray-900 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-gray-700 uppercase mb-2">Number of Parts (Optional)</label>
+            <input
+              type="number"
+              value={partsCount}
+              onChange={(e) => setPartsCount(e.target.value)}
+              placeholder="e.g. 5 (Overrides seconds)"
+              className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-gray-900 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
+            />
+          </div>
+        </div>
+      )}
+
       {/* ⚙️ PRO SETTINGS TOGGLE */}
       <div className="w-full mt-2 mb-6">
         <button
@@ -190,7 +219,7 @@ const HeroInput = () => {
                 <input type="checkbox" checked={removeSilence} onChange={() => setRemoveSilence(!removeSilence)} className="w-4 h-4 text-blue-600 cursor-pointer rounded border-gray-300 focus:ring-blue-500" />
               </div>
 
-              {/* Background Music */}
+              {/* 🎵 RESTORED: Background Music */}
               <div className="flex items-center justify-between p-3 bg-white rounded-lg border border-gray-200 shadow-sm">
                 <div className="flex items-center gap-2">
                   <Music className="w-4 h-4 text-gray-500" />
@@ -217,12 +246,20 @@ const HeroInput = () => {
                 </select>
               </div>
 
+              {/* 🌟 SPLIT MODE EXCLUSIVE: Print Title & Part # 🌟 */}
+              {mode === "split" && (
+                <div className="flex items-center justify-between p-3 bg-white rounded-lg border border-gray-200 shadow-sm md:col-span-2">
+                  <div className="flex items-center gap-2">
+                    <AlignLeft className="w-4 h-4 text-gray-500" />
+                    <span className="text-sm font-medium text-gray-700">Print Title & Part # (Top Center)</span>
+                  </div>
+                  <input type="checkbox" checked={printPartTitle} onChange={() => setPrintPartTitle(!printPartTitle)} className="w-4 h-4 text-blue-600 cursor-pointer rounded border-gray-300 focus:ring-blue-500" />
+                </div>
+              )}
+
             </div>
 
-            {/* ════════════════════════════════════════
-                🌟 NEW: SUBTITLE STYLE SECTION
-                Only shown when subtitles are ON and autoPilot is OFF
-                ════════════════════════════════════════ */}
+            {/* 🌟 SUBTITLE STYLE SECTION 🌟 */}
             {!autoPilot && subtitles && (
               <>
                 <div className="w-full h-px bg-gray-200"></div>
