@@ -25,6 +25,7 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 
 const downloadsDir = path.join(process.cwd(), 'downloads');
 if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir);
+app.use('/downloads', express.static(downloadsDir));
 
 // 🌟 LOCAL JSON DATABASE SETUP 🌟
 const jobsFile = path.join(process.cwd(), 'jobs.json');
@@ -59,7 +60,6 @@ app.delete('/api/jobs/:id', (req, res) => {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// 🌟 HELPER: FORMAT SECONDS TO .SRT TIMESTAMP (00:00:00,000) 🌟
 const formatSrtTime = (seconds) => {
     const h = Math.floor(seconds / 3600);
     const m = Math.floor((seconds % 3600) / 60);
@@ -72,7 +72,7 @@ const formatSrtTime = (seconds) => {
 // GENERATION ENGINE
 // ==========================================
 app.post('/api/generate', async (req, res) => {
-    const { url: videoUrl, mode, chunkDuration, partsCount, niche, subNiche, customPrompt, proSettings } = req.body;
+    const { url: videoUrl, mode, chunkDuration, partsCount, proSettings } = req.body;
     
     res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -118,7 +118,7 @@ app.post('/api/generate', async (req, res) => {
         '--merge-output-format', 'mp4',
         '--ffmpeg-location', ffmpegPath,
         '-o', outputPath, '--force-overwrites',
-        '--cookies-from-browser', 'edge', '--js-runtimes', 'node', 
+        '--cookies-from-browser', 'firefox', '--js-runtimes', 'node', 
         '--extractor-args', 'youtube:player_client=tv', videoUrl
     ]);
 
@@ -137,7 +137,6 @@ app.post('/api/generate', async (req, res) => {
         let printPartTitle = false;
         
         let subtitleFont = "Impact";
-        let assColor = "&H0000FFFF"; 
         let isBold = "1";
         let rawColorName = "White"; 
 
@@ -151,16 +150,7 @@ app.post('/api/generate', async (req, res) => {
                 subtitleFont = proSettings.subtitleFont.replace(" Bold", "");
                 isBold = (subtitleFont === "Impact" || proSettings.subtitleFont.includes("Bold") || subtitleFont === "Comic Sans MS") ? "1" : "0";
             }
-            
-            const colorMap = {
-                "White": "&H00FFFFFF",
-                "Yellow": "&H0000FFFF",
-                "Red": "&H000000FF",
-                "Cyan": "&H00FFFF00",
-                "Green": "&H0000FF00"
-            };
-            if (proSettings.subtitleColor && colorMap[proSettings.subtitleColor]) {
-                assColor = colorMap[proSettings.subtitleColor];
+            if (proSettings.subtitleColor) {
                 rawColorName = proSettings.subtitleColor; 
             }
         }
@@ -203,15 +193,17 @@ app.post('/api/generate', async (req, res) => {
                 .on('end', async () => {
                     sendUpdate(`✅ Raw cut complete!`);
                     sendUpdate(`\n[5/7] ✨ Step 2: Applying TikTok Glass Effect and Settings...`);
-                    if (speedMultiplier !== 1.0) sendUpdate(`   ⏩ Speeding up playback to ${speedMultiplier}x!`);
                     
                     for(let i = 1; i <= expectedParts; i++) {
                         const rawPartPath = path.join(jobFolder, `raw_part_${String(i - 1).padStart(3, '0')}.mp4`);
-                        const finalPartPath = path.join(jobFolder, `TikTok_Ready_Part_${i}.mp4`);
+                        const basePartPath = path.join(jobFolder, `base_part_${i}.mp4`); // FFmpeg renders this first
+                        const finalPartPath = path.join(jobFolder, `TikTok_Ready_Part_${i}.mp4`); // Remotion creates the final output
                         if (!fs.existsSync(rawPartPath)) break;
-                        sendUpdate(`   👉 Rendering Part ${i} of ${expectedParts}...`);
+                        
+                        sendUpdate(`   👉 Processing Part ${i} of ${expectedParts}...`);
                         
                         try {
+                            // 🌟 PHASE 1: FFMPEG handles Background Blur, Cropping, and Speed 🌟
                             await new Promise((resolve, reject) => {
                                 let lastReportedPercent = 0;
                                 let filterGraph = [
@@ -222,19 +214,6 @@ app.post('/api/generate', async (req, res) => {
                                 
                                 let outputOptions = ['-c:v libx264', '-preset fast', '-async 1', '-vsync 1'];
                                 let currentVOut = 'outv';
-
-                                if (printPartTitle) {
-                                    sendUpdate(`   🔤 Burning in Static Watermark: Title (Top) & Part ${i} (Bottom)...`);
-                                    
-                                    const safeTitleText = originalTitle.replace(/['":;,\\]/g, '').trim();
-                                    const colorMapDraw = { "White": "white", "Yellow": "yellow", "Red": "red", "Cyan": "cyan", "Green": "green" };
-                                    const drawColor = colorMapDraw[rawColorName] || "white";
-
-                                    const drawFilter = `[${currentVOut}]drawtext=text='${safeTitleText}':fontcolor=${drawColor}:fontsize=45:borderw=4:bordercolor=black:x=(w-text_w)/2:y=150,drawtext=text='Part ${i}':fontcolor=${drawColor}:fontsize=60:borderw=4:bordercolor=black:x=(w-text_w)/2:y=h-250[titlev]`;
-                                    
-                                    filterGraph.push(drawFilter);
-                                    currentVOut = 'titlev';
-                                }
 
                                 if (speedMultiplier !== 1.0) {
                                     const pts = (1 / speedMultiplier).toFixed(4);
@@ -248,7 +227,7 @@ app.post('/api/generate', async (req, res) => {
                                 ffmpeg(rawPartPath)
                                     .complexFilter(filterGraph)
                                     .outputOptions(outputOptions)
-                                    .output(finalPartPath)
+                                    .output(basePartPath)
                                     .on('progress', (progress) => {
                                         let currentSeconds = 0;
                                         if (progress.timemark) {
@@ -261,7 +240,7 @@ app.post('/api/generate', async (req, res) => {
                                         
                                         if (currentPercent > 100) currentPercent = 100;
                                         if (currentPercent >= lastReportedPercent + 10) {
-                                            sendUpdate(`   ⏳ Rendering Part ${i}: ${currentPercent}% complete...`);
+                                            sendUpdate(`   ⏳ FFmpeg Filtering Part ${i}: ${currentPercent}% complete...`);
                                             lastReportedPercent = currentPercent;
                                         }
                                     })
@@ -269,7 +248,45 @@ app.post('/api/generate', async (req, res) => {
                                     .on('error', reject)
                                     .run();
                             });
-                            sendUpdate(`   ✅ Part ${i} Rendered Successfully!`);
+
+                            // 🌟 PHASE 2: REMOTION handles the high-quality HTML/CSS Text Overlay 🌟
+                            if (printPartTitle) {
+                                sendUpdate(`   🎨 Remotion is layering premium text on Part ${i}... (This takes a moment)`);
+                                
+                                // Clean up the title and format the path specifically for Remotion
+                                const safeTitleText = originalTitle.replace(/['":;,\\]/g, '').trim();
+                                const videoFileUrl = `http://localhost:${PORT}/downloads/${folderName}/base_part_${i}.mp4`;
+
+                                // Get exact duration to tell Remotion when to stop rendering
+                                let exactDuration = timePerChunk / speedMultiplier;
+                                try {
+                                    const { stdout } = await execPromise(`.\\ffmpeg.exe -i "${basePartPath}" 2>&1`);
+                                } catch (err) {
+                                    const match = err.message.match(/Duration: (\d{2}):(\d{2}):(\d{2}\.\d+)/);
+                                    if (match) exactDuration = (parseInt(match[1]) * 3600) + (parseInt(match[2]) * 60) + parseFloat(match[3]);
+                                }
+
+                                // Write the dynamic text to a JSON file for this specific part
+                                const propsData = {
+                                    topTitle: safeTitleText,
+                                    partNumber: `Part ${i}`,
+                                    videoUrl: videoFileUrl,
+                                    durationInSeconds: exactDuration
+                                };
+                                const propsPath = path.join(jobFolder, `props_part_${i}.json`);
+                                fs.writeFileSync(propsPath, JSON.stringify(propsData));
+
+                                // Silently run the Remotion CLI command! (--log=error prevents it from crashing the terminal)
+                                await execPromise(`npx remotion render CapCutStyleVideo "${finalPartPath}" --props="${propsPath}" --log=error`);
+                                
+                                // Delete the intermediate base file to save hard drive space
+                                fs.unlinkSync(basePartPath);
+                            } else {
+                                // If they disabled titles in settings, just rename the FFmpeg output
+                                fs.renameSync(basePartPath, finalPartPath);
+                            }
+
+                            sendUpdate(`   ✅ Part ${i} Fully Rendered Successfully!`);
                             fs.unlinkSync(rawPartPath); 
                         } catch (err) { sendUpdate(`   ❌ Error rendering Part ${i}: ${err.message}`); }
                     }
@@ -289,7 +306,7 @@ app.post('/api/generate', async (req, res) => {
         }
 
         // ==========================================
-        // OPTION 1: SHORT VIDEO (KARAOKE HIGHLIGHT ENGINE)
+        // OPTION 1: SHORT VIDEO (KARAOKE ENGINE)
         // ==========================================
         if (mode === 'short') {
             const audioPath = path.join(jobFolder, 'audio.m4a');
@@ -413,19 +430,15 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
                     const metadataPath = path.join(jobFolder, 'metadata.txt');
                     fs.writeFileSync(metadataPath, `Original Video: ${originalTitle}\nChannel: ${originalChannel}\nTikTok Title: ${title}\nHashtags: ${hashtags}\nClip Duration: ${duration.toFixed(1)} seconds`);
 
-                    // ==========================================================
-                    // 🌟 STEP 3: HORMZI-STYLE WORD HIGHLIGHT ENGINE 🌟
-                    // ==========================================================
                     let srtPath = "";
                     
                     if (wantsSubtitles) {
                         let srtContent = '';
                         let subIndex = 1;
 
-                        // 🌟 SETUP COLORS FOR THE ASS OVERRIDE TAGS 🌟
-                        let shortBaseColorCode = "FFFFFF"; // Base text is always White
-                        let shortHighlightColorCode = assColor.substring(4); // Strips the "&H00" to get standard 6-char Hex
-                        if (shortHighlightColorCode === "FFFFFF") shortHighlightColorCode = "00FFFF"; // If they chose White, highlight Yellow
+                        const htmlColors = { "White": "FFFFFF", "Yellow": "FFFF00", "Red": "FF0000", "Cyan": "00FFFF", "Green": "00FF00" };
+                        let highlightHex = htmlColors[rawColorName] || "FFFF00"; 
+                        if (highlightHex === "FFFFFF") highlightHex = "FFFF00"; 
 
                         if (transcription.words && transcription.words.length > 0) {
                             sendUpdate(`   🔤 Building CapCut-Style Highlighted Subtitles...`);
@@ -453,14 +466,12 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
                             }
                             if (currentChunk.length > 0) subtitleChunks.push(currentChunk);
 
-                            // 🌟 THE HACKER LOOP: GENERATING OVERLAPPING HIGHLIGHTS 🌟
                             subtitleChunks.forEach(chunk => {
                                 for (let i = 0; i < chunk.length; i++) {
                                     const currentWord = chunk[i];
                                     let wordStart = Math.max(0, currentWord.start - start);
                                     let wordEnd;
                                     
-                                    // Highlight lasts until the next word starts!
                                     if (i < chunk.length - 1) {
                                         wordEnd = Math.max(0, chunk[i + 1].start - start);
                                     } else {
@@ -470,9 +481,8 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
                                     if (wordEnd > wordStart) {
                                         let text = chunk.map((w, idx) => {
                                             let cleanWord = w.word.trim();
-                                            // Inject ASS Color Override to highlight ONLY the active word!
                                             if (idx === i) {
-                                                return `{\\c&H${shortHighlightColorCode}&}${cleanWord}{\\c&H${shortBaseColorCode}&}`;
+                                                return `<font color="#${highlightHex}">${cleanWord}</font>`;
                                             }
                                             return cleanWord;
                                         }).join(' ');
@@ -536,7 +546,7 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
                                         let text = chunk.map((w, idx) => {
                                             let cleanWord = w.word.trim();
                                             if (idx === i) {
-                                                return `{\\c&H${shortHighlightColorCode}&}${cleanWord}{\\c&H${shortBaseColorCode}&}`;
+                                                return `<font color="#${highlightHex}">${cleanWord}</font>`;
                                             }
                                             return cleanWord;
                                         }).join(' ');
@@ -563,7 +573,6 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
 
                     if (wantsSubtitles && srtPath) {
                         const safeSrtPath = path.relative(process.cwd(), srtPath).replace(/\\/g, '/');
-                        // 🌟 Fontsize increased to 45, Outline to 3.5, and MarginV to 80 so it's BIG and clear! 🌟
                         const style = `Fontname=${subtitleFont},Fontsize=45,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=3.5,Shadow=1,Alignment=2,MarginV=80,Bold=${isBold}`;
                         
                         vFilters.push({ 
