@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Settings, Wand2, Type, Scissors, Music, FastForward, ChevronDown, ChevronUp, Loader2, Link as LinkIcon, Sparkles, AlignLeft } from "lucide-react";
+import { Settings, Wand2, Type, Scissors, Music, FastForward, ChevronDown, ChevronUp, Loader2, Link as LinkIcon, Sparkles, AlignLeft, X, MonitorPlay, SlidersHorizontal, Palette, BoxSelect, ShieldAlert, CaseUpper, Zap, Baseline } from "lucide-react";
 
 const HeroInput = () => {
   // 🌟 MAIN INPUT STATES 🌟
@@ -7,6 +7,7 @@ const HeroInput = () => {
   const [mode, setMode] = useState("short");
   const [chunkDuration, setChunkDuration] = useState("60");
   const [partsCount, setPartsCount] = useState("");
+  const [customVideoTitle, setCustomVideoTitle] = useState(""); // 🌟 NEW: Custom Title Override
   const [niche, setNiche] = useState("");
   const [subNiche, setSubNiche] = useState("");
   const [customPrompt, setCustomPrompt] = useState("");
@@ -23,27 +24,40 @@ const HeroInput = () => {
   // 🌟 SPLIT MODE SPECIFIC STATE 🌟
   const [printPartTitle, setPrintPartTitle] = useState(true);
 
-  // 🌟 SUBTITLE STYLE STATES 🌟
-  const [subtitleFont, setSubtitleFont] = useState("Impact");
-  const [subtitleColor, setSubtitleColor] = useState("White");
+  // 🌟 VISUAL EDITOR STATES (FULLY UNIFIED) 🌟
+  const [showVisualEditor, setShowVisualEditor] = useState(false);
+  
+  const [titleFontSize, setTitleFontSize] = useState(90);
+  const [titleYPos, setTitleYPos] = useState(200); 
+  
+  const [partFontSize, setPartFontSize] = useState(130);
+  const [partYPos, setPartYPos] = useState(150); 
+  
+  const [subtitleFontSize, setSubtitleFontSize] = useState(70);
+  const [subtitleYPos, setSubtitleYPos] = useState(380);
 
-  // Preview colors for the dropdown label badges
-  const colorPreviews: Record<string, { text: string; outline: string; label: string }> = {
-    White:  { text: "#ffffff", outline: "#000000", label: "White + Black outline" },
-    Yellow: { text: "#ffff00", outline: "#000000", label: "Yellow + Black outline" },
-    Red:    { text: "#ff3b3b", outline: "#000000", label: "Red + Black outline" },
-    Cyan:   { text: "#00ffff", outline: "#000000", label: "Cyan + Black outline" },
-    Green:  { text: "#00ff88", outline: "#000000", label: "Green + Black outline" },
+  const [subtitleFont, setSubtitleFont] = useState("Impact");
+  const [subtitleColor, setSubtitleColor] = useState("Yellow");
+  const [textBgStyle, setTextBgStyle] = useState("outline"); 
+
+  // 🌟 ADVANCED EDITING CONTROLS 🌟
+  const [showSafeZone, setShowSafeZone] = useState(true); 
+  const [forceUppercase, setForceUppercase] = useState(true);
+  const [wordsPerScreen, setWordsPerScreen] = useState("1"); 
+  const [animationStyle, setAnimationStyle] = useState("pop"); 
+
+  // Preview colors
+  const colorPreviews: Record<string, { text: string; outline: string }> = {
+    White:  { text: "#ffffff", outline: "#000000" },
+    Yellow: { text: "#ffff00", outline: "#000000" },
+    Red:    { text: "#ff0000", outline: "#000000" },
+    Cyan:   { text: "#00ffff", outline: "#000000" },
+    Green:  { text: "#00ff00", outline: "#000000" },
   };
 
   const handleGenerate = async () => {
     if (!url) {
       alert("Please enter a YouTube URL first!");
-      return;
-    }
-
-    if (mode === "short" && niche && subNiche === "Other" && !customPrompt) {
-      alert("Please describe your custom niche!");
       return;
     }
 
@@ -58,6 +72,7 @@ const HeroInput = () => {
           mode,
           chunkDuration,
           partsCount: partsCount ? parseInt(partsCount) : 0,
+          customVideoTitle, // 🌟 Sent to Backend
           niche,
           subNiche,
           customPrompt,
@@ -70,11 +85,20 @@ const HeroInput = () => {
             subtitleFont,
             subtitleColor,
             printPartTitle, 
+            titleFontSize,
+            titleYPos,
+            partFontSize,
+            partYPos,
+            subtitleFontSize,
+            subtitleYPos,
+            textBgStyle,
+            forceUppercase,
+            wordsPerScreen, 
+            animationStyle  
           },
         }),
       });
 
-      // 🌟 LIVE STREAM READER (SSE) 🌟
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
 
@@ -102,8 +126,61 @@ const HeroInput = () => {
     }
   };
 
+  const PREVIEW_SCALE = 0.25; 
+
+  const getTextStyle = (isHighlight: boolean = false) => {
+    let base: any = {
+      fontFamily: subtitleFont,
+      fontWeight: "900",
+      textTransform: forceUppercase ? "uppercase" : "none",
+      color: isHighlight ? (colorPreviews[subtitleColor]?.text || "#fff") : "white",
+      zIndex: 10,
+    };
+
+    if (textBgStyle === "outline") {
+      base.textShadow = "1.5px 1.5px 0 black, -1px -1px 0 black, 2px 2px 4px rgba(0,0,0,0.6)";
+      base.WebkitTextStroke = "1px black";
+    }
+    if (textBgStyle === "box") {
+      base.backgroundColor = "rgba(0, 0, 0, 0.85)";
+      base.padding = "2px 6px";
+      base.textShadow = "none";
+    }
+    if (textBgStyle === "shadow") {
+      base.textShadow = "0px 0px 8px rgba(0,0,0,1), 0px 0px 4px rgba(0,0,0,1)";
+      base.WebkitTextStroke = "0.5px rgba(0,0,0,0.5)";
+    }
+    if (textBgStyle === "3d") {
+      base.textShadow = "3px 3px 0px #000";
+      base.WebkitTextStroke = "1px black";
+    }
+
+    return base;
+  };
+
+  const renderSubtitlePreview = () => {
+    const highlightColor = colorPreviews[subtitleColor]?.text || "#fff";
+    if (wordsPerScreen === "1") return <span style={{ color: highlightColor }}>VIRAL</span>;
+    if (wordsPerScreen === "3") {
+      return (
+        <>
+          <span style={{ color: "white" }}>SUPER </span>
+          <span style={{ color: highlightColor }}>VIRAL </span>
+          <span style={{ color: "white" }}>CLIP</span>
+        </>
+      );
+    }
+    return (
+      <>
+        <span style={{ color: "white" }}>THIS IS A </span>
+        <span style={{ color: highlightColor }}>VIRAL </span>
+        <span style={{ color: "white" }}>VIDEO CLIP</span>
+      </>
+    );
+  };
+
   return (
-    <div className="w-full max-w-4xl mx-auto mt-10 p-6 bg-white border border-gray-200 rounded-2xl shadow-sm">
+    <div className="w-full max-w-4xl mx-auto mt-10 p-6 bg-white border border-gray-200 rounded-2xl shadow-sm relative">
 
       {/* 🔗 URL INPUT */}
       <div className="relative mb-6">
@@ -121,56 +198,38 @@ const HeroInput = () => {
 
       {/* 🎛️ MODE SELECTOR */}
       <div className="grid grid-cols-2 gap-4 mb-6">
-        <button
-          onClick={() => setMode("short")}
-          className={`py-3 px-4 rounded-xl font-bold transition-all ${
-            mode === "short" ? "bg-blue-600 text-white shadow-md" : "bg-gray-100 text-gray-600 hover:bg-gray-200 border border-transparent"
-          }`}
-        >
+        <button onClick={() => setMode("short")} className={`py-3 px-4 rounded-xl font-bold transition-all ${mode === "short" ? "bg-blue-600 text-white shadow-md" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
           Viral Short (AI Edited)
         </button>
-        <button
-          onClick={() => setMode("split")}
-          className={`py-3 px-4 rounded-xl font-bold transition-all ${
-            mode === "split" ? "bg-blue-600 text-white shadow-md" : "bg-gray-100 text-gray-600 hover:bg-gray-200 border border-transparent"
-          }`}
-        >
+        <button onClick={() => setMode("split")} className={`py-3 px-4 rounded-xl font-bold transition-all ${mode === "split" ? "bg-blue-600 text-white shadow-md" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
           Split Mode (Parts)
         </button>
       </div>
 
-      {/* 🌟 RESTORED: SPLIT MODE INPUTS (ONLY SHOWS IN SPLIT MODE) 🌟 */}
+      {/* 🌟 SPLIT MODE TIMING INPUTS */}
       {mode === "split" && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 p-4 bg-blue-50/50 border border-blue-100 rounded-xl animate-in fade-in slide-in-from-top-2">
+          
+          {/* 🌟 NEW: Custom Title Input 🌟 */}
+          <div className="md:col-span-2 mb-2">
+            <label className="block text-xs font-bold text-gray-700 uppercase mb-2">Custom Video Title (Optional)</label>
+            <input type="text" value={customVideoTitle} onChange={(e) => setCustomVideoTitle(e.target.value)} placeholder="Leave blank to auto-fetch from YouTube..." className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-gray-900 focus:outline-none focus:border-blue-500 transition-all" />
+          </div>
+
           <div>
             <label className="block text-xs font-bold text-gray-700 uppercase mb-2">Seconds per Part</label>
-            <input
-              type="number"
-              value={chunkDuration}
-              onChange={(e) => setChunkDuration(e.target.value)}
-              placeholder="e.g. 60"
-              className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-gray-900 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
-            />
+            <input type="number" value={chunkDuration} onChange={(e) => setChunkDuration(e.target.value)} placeholder="e.g. 60" className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-gray-900 focus:outline-none focus:border-blue-500 transition-all" />
           </div>
           <div>
             <label className="block text-xs font-bold text-gray-700 uppercase mb-2">Number of Parts (Optional)</label>
-            <input
-              type="number"
-              value={partsCount}
-              onChange={(e) => setPartsCount(e.target.value)}
-              placeholder="e.g. 5 (Overrides seconds)"
-              className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-gray-900 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
-            />
+            <input type="number" value={partsCount} onChange={(e) => setPartsCount(e.target.value)} placeholder="e.g. 5" className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-gray-900 focus:outline-none focus:border-blue-500 transition-all" />
           </div>
         </div>
       )}
 
       {/* ⚙️ PRO SETTINGS TOGGLE */}
       <div className="w-full mt-2 mb-6">
-        <button
-          onClick={() => setShowSettings(!showSettings)}
-          className="flex items-center justify-center gap-2 w-full py-3 text-sm font-bold text-gray-600 bg-gray-50 hover:bg-gray-100 rounded-xl transition-all border border-gray-200"
-        >
+        <button onClick={() => setShowSettings(!showSettings)} className="flex items-center justify-center gap-2 w-full py-3 text-sm font-bold text-gray-600 bg-gray-50 hover:bg-gray-100 rounded-xl transition-all border border-gray-200">
           <Settings className="w-4 h-4" />
           {showSettings ? "Hide Advanced Settings" : "Show Advanced Settings"}
           {showSettings ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -179,12 +238,9 @@ const HeroInput = () => {
         {showSettings && (
           <div className="mt-4 p-5 bg-gray-50 border border-gray-200 rounded-xl animate-in slide-in-from-top-2 fade-in space-y-5">
 
-            {/* ✨ AI AUTO-PILOT */}
             <div className="flex items-center justify-between p-4 bg-blue-50 border border-blue-100 rounded-lg shadow-sm">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-blue-100 rounded-full">
-                  <Wand2 className="w-5 h-5 text-blue-600" />
-                </div>
+                <div className="p-2 bg-blue-100 rounded-full"><Wand2 className="w-5 h-5 text-blue-600" /></div>
                 <div>
                   <h4 className="text-sm font-bold text-gray-900">AI Auto-Pilot</h4>
                   <p className="text-xs text-gray-600">Let the 70B AI analyze the video and pick the perfect vibe.</p>
@@ -198,34 +254,21 @@ const HeroInput = () => {
 
             <div className="w-full h-px bg-gray-200"></div>
 
-            {/* 🎚️ MANUAL CONTROLS */}
             <div className={`grid grid-cols-1 md:grid-cols-2 gap-4 transition-all duration-300 ${autoPilot ? "opacity-50 pointer-events-none grayscale" : "opacity-100"}`}>
 
-              {/* Subtitles toggle */}
               <div className="flex items-center justify-between p-3 bg-white rounded-lg border border-gray-200 shadow-sm">
-                <div className="flex items-center gap-2">
-                  <Type className="w-4 h-4 text-gray-500" />
-                  <span className="text-sm font-medium text-gray-700">Burn-in Subtitles</span>
-                </div>
+                <div className="flex items-center gap-2"><Type className="w-4 h-4 text-gray-500" /><span className="text-sm font-medium text-gray-700">Burn-in Subtitles</span></div>
                 <input type="checkbox" checked={subtitles} onChange={() => setSubtitles(!subtitles)} className="w-4 h-4 text-blue-600 cursor-pointer rounded border-gray-300 focus:ring-blue-500" />
               </div>
 
-              {/* Silence Removal */}
               <div className="flex items-center justify-between p-3 bg-white rounded-lg border border-gray-200 shadow-sm">
-                <div className="flex items-center gap-2">
-                  <Scissors className="w-4 h-4 text-gray-500" />
-                  <span className="text-sm font-medium text-gray-700">Auto-Cut Silences</span>
-                </div>
+                <div className="flex items-center gap-2"><Scissors className="w-4 h-4 text-gray-500" /><span className="text-sm font-medium text-gray-700">Auto-Cut Silences</span></div>
                 <input type="checkbox" checked={removeSilence} onChange={() => setRemoveSilence(!removeSilence)} className="w-4 h-4 text-blue-600 cursor-pointer rounded border-gray-300 focus:ring-blue-500" />
               </div>
 
-              {/* 🎵 RESTORED: Background Music */}
               <div className="flex items-center justify-between p-3 bg-white rounded-lg border border-gray-200 shadow-sm">
-                <div className="flex items-center gap-2">
-                  <Music className="w-4 h-4 text-gray-500" />
-                  <span className="text-sm font-medium text-gray-700">Music Vibe</span>
-                </div>
-                <select value={bgMusic} onChange={(e) => setBgMusic(e.target.value)} className="bg-gray-50 text-gray-800 border border-gray-200 text-xs rounded-md p-1.5 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 cursor-pointer font-medium">
+                <div className="flex items-center gap-2"><Music className="w-4 h-4 text-gray-500" /><span className="text-sm font-medium text-gray-700">Music Vibe</span></div>
+                <select value={bgMusic} onChange={(e) => setBgMusic(e.target.value)} className="bg-gray-50 text-gray-800 border border-gray-200 text-xs rounded-md p-1.5 font-medium outline-none">
                   <option value="None">None</option>
                   <option value="Lo-Fi">Chill Lo-Fi</option>
                   <option value="Phonk">Sigma Phonk</option>
@@ -233,130 +276,264 @@ const HeroInput = () => {
                 </select>
               </div>
 
-              {/* Pacing */}
               <div className="flex items-center justify-between p-3 bg-white rounded-lg border border-gray-200 shadow-sm">
-                <div className="flex items-center gap-2">
-                  <FastForward className="w-4 h-4 text-gray-500" />
-                  <span className="text-sm font-medium text-gray-700">Video Pacing</span>
-                </div>
-                <select value={pacing} onChange={(e) => setPacing(e.target.value)} className="bg-gray-50 text-gray-800 border border-gray-200 text-xs rounded-md p-1.5 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 cursor-pointer font-medium">
+                <div className="flex items-center gap-2"><FastForward className="w-4 h-4 text-gray-500" /><span className="text-sm font-medium text-gray-700">Video Pacing</span></div>
+                <select value={pacing} onChange={(e) => setPacing(e.target.value)} className="bg-gray-50 text-gray-800 border border-gray-200 text-xs rounded-md p-1.5 font-medium outline-none">
                   <option value="Normal">1.0x (Normal)</option>
                   <option value="Fast">1.1x (TikTok Fast)</option>
                   <option value="VeryFast">1.25x (Aggressive)</option>
                 </select>
               </div>
 
-              {/* 🌟 SPLIT MODE EXCLUSIVE: Print Title & Part # 🌟 */}
               {mode === "split" && (
                 <div className="flex items-center justify-between p-3 bg-white rounded-lg border border-gray-200 shadow-sm md:col-span-2">
-                  <div className="flex items-center gap-2">
-                    <AlignLeft className="w-4 h-4 text-gray-500" />
-                    <span className="text-sm font-medium text-gray-700">Print Title & Part # (Top Center)</span>
-                  </div>
+                  <div className="flex items-center gap-2"><AlignLeft className="w-4 h-4 text-gray-500" /><span className="text-sm font-medium text-gray-700">Print Title & Part #</span></div>
                   <input type="checkbox" checked={printPartTitle} onChange={() => setPrintPartTitle(!printPartTitle)} className="w-4 h-4 text-blue-600 cursor-pointer rounded border-gray-300 focus:ring-blue-500" />
                 </div>
               )}
 
-            </div>
-
-            {/* 🌟 SUBTITLE STYLE SECTION 🌟 */}
-            {!autoPilot && subtitles && (
-              <>
-                <div className="w-full h-px bg-gray-200"></div>
-
-                <div>
-                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                    <Type className="w-3.5 h-3.5" />
-                    Subtitle Style
-                  </p>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-
-                    {/* 🔤 FONT PICKER */}
-                    <div className="flex items-center justify-between p-3 bg-white rounded-lg border border-gray-200 shadow-sm">
-                      <div className="flex items-center gap-2">
-                        <span className="text-base">🔤</span>
-                        <span className="text-sm font-medium text-gray-700">Font Style</span>
-                      </div>
-                      <select
-                        value={subtitleFont}
-                        onChange={(e) => setSubtitleFont(e.target.value)}
-                        className="bg-gray-50 text-gray-800 border border-gray-200 text-xs rounded-md p-1.5 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 cursor-pointer font-medium"
-                      >
-                        <option value="Impact">Impact (TikTok Classic)</option>
-                        <option value="Arial Bold">Arial Bold (Clean)</option>
-                        <option value="Montserrat">Montserrat (Modern)</option>
-                        <option value="Comic Sans MS">Comic Sans (Meme 💀)</option>
-                      </select>
-                    </div>
-
-                    {/* 🎨 COLOR PICKER */}
-                    <div className="flex items-center justify-between p-3 bg-white rounded-lg border border-gray-200 shadow-sm">
-                      <div className="flex items-center gap-2">
-                        <span className="text-base">🎨</span>
-                        <span className="text-sm font-medium text-gray-700">Text Color</span>
-                      </div>
-                      <select
-                        value={subtitleColor}
-                        onChange={(e) => setSubtitleColor(e.target.value)}
-                        className="bg-gray-50 text-gray-800 border border-gray-200 text-xs rounded-md p-1.5 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 cursor-pointer font-medium"
-                      >
-                        <option value="White">⬜ White + Black outline</option>
-                        <option value="Yellow">🟡 Yellow + Black outline</option>
-                        <option value="Red">🔴 Red + Black outline</option>
-                        <option value="Cyan">🩵 Cyan + Black outline</option>
-                        <option value="Green">🟢 Green + Black outline</option>
-                      </select>
-                    </div>
-
-                  </div>
-
-                  {/* 🌟 LIVE PREVIEW BADGE 🌟 */}
-                  <div className="mt-3 flex items-center justify-center">
-                    <div className="px-4 py-2 bg-black rounded-lg flex items-center gap-2">
-                      <span className="text-xs text-gray-400 font-medium">Preview:</span>
-                      <span
-                        style={{
-                          fontFamily: subtitleFont,
-                          color: colorPreviews[subtitleColor]?.text || "#fff",
-                          textShadow: `1px 1px 3px ${colorPreviews[subtitleColor]?.outline || "#000"}, -1px -1px 3px ${colorPreviews[subtitleColor]?.outline || "#000"}`,
-                          fontSize: "15px",
-                          fontWeight: "bold",
-                          letterSpacing: subtitleFont === "Impact" ? "0.05em" : "normal",
-                          textTransform: subtitleFont === "Impact" ? "uppercase" : "none",
-                        }}
-                      >
-                        THIS IS HOW IT LOOKS
-                      </span>
-                    </div>
-                  </div>
-
+              {(!autoPilot && (subtitles || (mode === "split" && printPartTitle))) && (
+                <div className="md:col-span-2 mt-2">
+                  <button onClick={() => setShowVisualEditor(true)} className="w-full py-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold text-sm rounded-xl flex items-center justify-center gap-2 transition-all shadow-sm">
+                    <Palette className="w-5 h-5" /> Open Visual Style Editor
+                  </button>
                 </div>
-              </>
-            )}
+              )}
 
+            </div>
           </div>
         )}
       </div>
 
-      {/* 🚀 GENERATE BUTTON */}
-      <button
-        onClick={handleGenerate}
-        disabled={isLoading}
-        className="w-full py-4 bg-blue-600 text-white font-black text-lg rounded-xl hover:bg-blue-700 transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3"
-      >
-        {isLoading ? (
-          <>
-            <Loader2 className="w-6 h-6 animate-spin" />
-            Processing Video...
-          </>
-        ) : (
-          <>
-            <Sparkles className="w-6 h-6" />
-            Generate Viral {mode === "short" ? "Short" : "Parts"}
-          </>
-        )}
+      <button onClick={handleGenerate} disabled={isLoading} className="w-full py-4 bg-blue-600 text-white font-black text-lg rounded-xl hover:bg-blue-700 transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3">
+        {isLoading ? <><Loader2 className="w-6 h-6 animate-spin" /> Processing...</> : <><Sparkles className="w-6 h-6" /> Generate Video</>}
       </button>
+
+      {/* ========================================================= */}
+      {/* 🎨 UNIFIED VISUAL STYLE EDITOR MODAL (POPUP) 🎨 */}
+      {/* ========================================================= */}
+      {showVisualEditor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="bg-white w-full max-w-5xl rounded-2xl shadow-2xl overflow-hidden flex flex-col md:flex-row border border-gray-200">
+            
+            {/* 🔴 LIVE PREVIEW SECTION 🔴 */}
+            <div className="bg-gray-900 p-6 flex items-center justify-center relative md:w-5/12 border-r border-gray-800">
+              <div className="relative bg-gray-800 border border-gray-700 shadow-2xl overflow-hidden rounded-md" style={{ width: "270px", height: "480px" }}>
+                
+                <div className="absolute inset-0 flex flex-col items-center justify-center opacity-30">
+                  <MonitorPlay className="w-16 h-16 text-gray-500 mb-2" />
+                  <span className="text-gray-500 font-bold text-xs uppercase tracking-widest">Video Background</span>
+                </div>
+
+                {showSafeZone && (
+                  <div className="absolute inset-0 pointer-events-none z-0">
+                    <div className="absolute right-2 bottom-[100px] w-[50px] h-[250px] bg-red-500/20 border border-red-500/40 rounded flex items-center justify-center">
+                      <span className="text-[10px] text-red-200 -rotate-90 font-bold tracking-widest">UI BUTTONS</span>
+                    </div>
+                    <div className="absolute bottom-0 left-0 right-0 h-[100px] bg-red-500/20 border-t border-red-500/40 flex items-center justify-center">
+                      <span className="text-[10px] text-red-200 font-bold tracking-widest">DESCRIPTION AREA</span>
+                    </div>
+                     <div className="absolute top-0 left-0 right-0 h-[60px] bg-red-500/20 border-b border-red-500/40 flex items-center justify-center">
+                      <span className="text-[10px] text-red-200 font-bold tracking-widest">TOP UI</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 1. TOP TITLE PREVIEW */}
+                {mode === "split" && printPartTitle && (
+                  <div className="absolute w-full flex justify-center text-center leading-tight transition-all z-10"
+                    style={{
+                      top: `${titleYPos * PREVIEW_SCALE}px`,
+                      fontSize: `${titleFontSize * PREVIEW_SCALE}px`,
+                      textAlign: "center", maxWidth: "85%", lineHeight: "1.15", whiteSpace: "pre-wrap",
+                      ...getTextStyle(false)
+                    }}
+                  >
+                    <span style={textBgStyle === 'box' ? { backgroundColor: "rgba(0,0,0,0.85)", padding: "15px 30px", borderRadius: "15px", display: "inline-block" } : {}}>
+                      {/* 🌟 Uses Custom Title if typed, else falls back to placeholder 🌟 */}
+                      {customVideoTitle ? customVideoTitle : "VIDEO TITLE"}
+                    </span>
+                  </div>
+                )}
+
+                {/* 2. SUBTITLES PREVIEW */}
+                {subtitles && (
+                  <div className="absolute w-full flex flex-col items-center justify-center text-center leading-tight transition-all z-10"
+                    style={{
+                      bottom: `${subtitleYPos * PREVIEW_SCALE}px`,
+                      fontSize: `${subtitleFontSize * PREVIEW_SCALE}px`,
+                      fontFamily: subtitleFont,
+                      fontWeight: "900",
+                      textTransform: forceUppercase ? "uppercase" : "none",
+                    }}
+                  >
+                    <div style={{
+                       backgroundColor: textBgStyle === 'box' ? "rgba(0,0,0,0.85)" : "transparent",
+                       padding: textBgStyle === 'box' ? "10px 20px" : "0",
+                       borderRadius: textBgStyle === 'box' ? "15px" : "0",
+                       textShadow: getTextStyle(false).textShadow,
+                       WebkitTextStroke: getTextStyle(false).WebkitTextStroke
+                    }}>
+                        {renderSubtitlePreview()}
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. PART NUMBER PREVIEW */}
+                {mode === "split" && printPartTitle && (
+                  <div className="absolute w-full flex justify-center text-center leading-tight transition-all z-10"
+                    style={{
+                      bottom: `${partYPos * PREVIEW_SCALE}px`,
+                      fontSize: `${partFontSize * PREVIEW_SCALE}px`,
+                      ...getTextStyle(true) 
+                    }}
+                  >
+                    <span style={textBgStyle === 'box' ? { backgroundColor: "rgba(0,0,0,0.85)", padding: "10px 30px", borderRadius: "15px", display: "inline-block" } : {}}>
+                      PART 1
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 🎛️ CONTROLS SECTION */}
+            <div className="p-6 md:w-7/12 flex flex-col bg-gray-50 max-h-[85vh] overflow-y-auto">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="font-black text-gray-900 text-lg flex items-center gap-2">
+                  <SlidersHorizontal className="w-5 h-5 text-blue-600" /> Unified Visual Editor
+                </h3>
+                <button onClick={() => setShowVisualEditor(false)} className="p-1.5 bg-gray-200 hover:bg-gray-300 rounded-full text-gray-600 transition-all"><X className="w-5 h-5" /></button>
+              </div>
+
+              <div className="space-y-6 flex-1">
+                
+                {/* 🎨 GLOBAL STYLE SETTINGS */}
+                {(subtitles || printPartTitle) && (
+                  <div className="space-y-4 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                    <div className="flex justify-between items-center mb-2">
+                      <h4 className="font-bold text-xs text-indigo-600 uppercase tracking-wider flex items-center gap-1.5"><Type className="w-3.5 h-3.5"/> Global Text Style</h4>
+                      <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-2 cursor-pointer" onClick={() => setForceUppercase(!forceUppercase)}>
+                           <CaseUpper className={`w-4 h-4 ${forceUppercase ? "text-indigo-600" : "text-gray-400"}`} />
+                           <span className={`text-[10px] font-bold ${forceUppercase ? "text-indigo-600" : "text-gray-400"}`}>ALL CAPS</span>
+                        </div>
+                         <div className="flex items-center gap-2 cursor-pointer" onClick={() => setShowSafeZone(!showSafeZone)}>
+                           <ShieldAlert className={`w-4 h-4 ${showSafeZone ? "text-red-500" : "text-gray-400"}`} />
+                           <span className={`text-[10px] font-bold ${showSafeZone ? "text-red-500" : "text-gray-400"}`}>SAFE ZONE</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-gray-600 mb-1">Font Family</label>
+                        <select value={subtitleFont} onChange={(e) => setSubtitleFont(e.target.value)} className="w-full bg-gray-50 border border-gray-200 rounded p-2 text-sm font-medium">
+                          <option value="Impact">Impact (TikTok)</option>
+                          <option value="Arial Bold">Arial Bold</option>
+                          <option value="Montserrat">Montserrat</option>
+                          <option value="Comic Sans MS">Comic Sans 💀</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-600 mb-1">Highlight Color</label>
+                        <select value={subtitleColor} onChange={(e) => setSubtitleColor(e.target.value)} className="w-full bg-gray-50 border border-gray-200 rounded p-2 text-sm font-medium">
+                          <option value="White">⬜ White</option>
+                          <option value="Yellow">🟡 Yellow</option>
+                          <option value="Red">🔴 Red</option>
+                          <option value="Cyan">🩵 Cyan</option>
+                          <option value="Green">🟢 Green</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-600 mb-1">Background Style</label>
+                        <div className="relative">
+                          <BoxSelect className="absolute left-2 top-2.5 w-4 h-4 text-gray-400 pointer-events-none" />
+                          <select value={textBgStyle} onChange={(e) => setTextBgStyle(e.target.value)} className="w-full bg-gray-50 border border-gray-200 rounded p-2 pl-8 text-sm font-medium">
+                            <option value="outline">Modern Outline</option>
+                            <option value="box">Classic Box ⬛</option>
+                            <option value="shadow">Soft Shadow ☁️</option>
+                            <option value="3d">Retro 3D 📐</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-600 mb-1">Animation Effect</label>
+                        <div className="relative">
+                          <Zap className="absolute left-2 top-2.5 w-4 h-4 text-gray-400 pointer-events-none" />
+                          <select value={animationStyle} onChange={(e) => setAnimationStyle(e.target.value)} className="w-full bg-gray-50 border border-gray-200 rounded p-2 pl-8 text-sm font-medium">
+                            <option value="pop">Pop (Dynamic Pop-in)</option>
+                            <option value="bounce">Bounce (Springy)</option>
+                            <option value="slide">Slide Up (Smooth)</option>
+                            <option value="fade">Fade In (Cinematic)</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* SUBTITLE POSITION */}
+                {subtitles && (
+                  <div className="space-y-4 bg-white p-4 rounded-xl border border-gray-200 shadow-sm border-l-4 border-l-green-500">
+                    <h4 className="font-bold text-xs text-green-600 uppercase tracking-wider">Subtitle Setup</h4>
+                    <div className="mb-4">
+                      <label className="flex items-center gap-2 text-xs font-bold text-gray-600 mb-1">
+                         <Baseline className="w-3.5 h-3.5" /> Words Per Screen
+                      </label>
+                      <select value={wordsPerScreen} onChange={(e) => setWordsPerScreen(e.target.value)} className="w-full bg-gray-50 border border-gray-200 rounded p-2 text-sm font-medium">
+                        <option value="1">1 Word (Hormozi Fast)</option>
+                        <option value="3">2-3 Words (Dynamic Focus)</option>
+                        <option value="full">Full Sentence (Standard)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="flex justify-between text-sm font-medium text-gray-700 mb-1"><span>Font Size</span> <span className="text-green-600 font-bold">{subtitleFontSize}</span></label>
+                      <input type="range" min="30" max="200" value={subtitleFontSize} onChange={(e) => setSubtitleFontSize(Number(e.target.value))} className="w-full accent-green-600" />
+                    </div>
+                    <div>
+                      <label className="flex justify-between text-sm font-medium text-gray-700 mb-1"><span>Position (Y-Axis Up)</span> <span className="text-green-600 font-bold">{subtitleYPos}px</span></label>
+                      <input type="range" min="20" max="800" value={subtitleYPos} onChange={(e) => setSubtitleYPos(Number(e.target.value))} className="w-full accent-green-600" />
+                    </div>
+                  </div>
+                )}
+
+                {/* TITLE & PART POSITION */}
+                {mode === "split" && printPartTitle && (
+                  <>
+                    <div className="space-y-4 bg-white p-4 rounded-xl border border-gray-200 shadow-sm border-l-4 border-l-blue-500">
+                      <h4 className="font-bold text-xs text-blue-600 uppercase tracking-wider">Top Title Position</h4>
+                      <div>
+                        <label className="flex justify-between text-sm font-medium text-gray-700 mb-1"><span>Font Size</span> <span className="text-blue-600 font-bold">{titleFontSize}</span></label>
+                        <input type="range" min="40" max="200" value={titleFontSize} onChange={(e) => setTitleFontSize(Number(e.target.value))} className="w-full accent-blue-600" />
+                      </div>
+                      <div>
+                        <label className="flex justify-between text-sm font-medium text-gray-700 mb-1"><span>Position (Y-Axis Down)</span> <span className="text-blue-600 font-bold">{titleYPos}px</span></label>
+                        <input type="range" min="20" max="800" value={titleYPos} onChange={(e) => setTitleYPos(Number(e.target.value))} className="w-full accent-blue-600" />
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 bg-white p-4 rounded-xl border border-gray-200 shadow-sm border-l-4 border-l-purple-500">
+                      <h4 className="font-bold text-xs text-purple-600 uppercase tracking-wider">Part Number Position</h4>
+                      <div>
+                        <label className="flex justify-between text-sm font-medium text-gray-700 mb-1"><span>Font Size</span> <span className="text-purple-600 font-bold">{partFontSize}</span></label>
+                        <input type="range" min="60" max="300" value={partFontSize} onChange={(e) => setPartFontSize(Number(e.target.value))} className="w-full accent-purple-600" />
+                      </div>
+                      <div>
+                        <label className="flex justify-between text-sm font-medium text-gray-700 mb-1"><span>Position (Y-Axis Up)</span> <span className="text-purple-600 font-bold">{partYPos}px</span></label>
+                        <input type="range" min="20" max="800" value={partYPos} onChange={(e) => setPartYPos(Number(e.target.value))} className="w-full accent-purple-600" />
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <button onClick={() => setShowVisualEditor(false)} className="mt-6 w-full py-4 bg-gray-900 hover:bg-black text-white font-bold text-lg rounded-xl transition-all shadow-md">
+                Save Layout
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

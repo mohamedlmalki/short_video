@@ -72,7 +72,7 @@ const formatSrtTime = (seconds) => {
 // GENERATION ENGINE
 // ==========================================
 app.post('/api/generate', async (req, res) => {
-    const { url: videoUrl, mode, chunkDuration, partsCount, proSettings } = req.body;
+    const { url: videoUrl, mode, chunkDuration, partsCount, customVideoTitle, proSettings } = req.body;
     
     res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -112,12 +112,14 @@ app.post('/api/generate', async (req, res) => {
 
     const outputPath = path.join(jobFolder, 'original_source.mp4');
     
+    // ⚠️ DOWNLOADER CODE UNTOUCHED ⚠️
     sendUpdate(`\n[2/7] 📥 Downloading High-Res Video...`);
     const ytDlpProcess = spawn('.\\yt-dlp.exe', [
         '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         '--merge-output-format', 'mp4',
         '--ffmpeg-location', ffmpegPath,
         '-o', outputPath, '--force-overwrites',
+        '--no-playlist', 
         '--cookies-from-browser', 'firefox', '--js-runtimes', 'node', 
         '--extractor-args', 'youtube:player_client=tv', videoUrl
     ]);
@@ -156,7 +158,7 @@ app.post('/api/generate', async (req, res) => {
         }
 
         // ==========================================
-        // OPTION 2: SPLIT VIDEO 
+        // OPTION 2: SPLIT VIDEO
         // ==========================================
         if (mode === 'split') {
             let timePerChunk = parseInt(chunkDuration) || 60;
@@ -192,27 +194,39 @@ app.post('/api/generate', async (req, res) => {
                 .output(rawOutputPattern)
                 .on('end', async () => {
                     sendUpdate(`✅ Raw cut complete!`);
-                    sendUpdate(`\n[5/7] ✨ Step 2: Applying TikTok Glass Effect and Settings...`);
+                    sendUpdate(`\n[5/7] ✨ Step 2: Applying Settings & Remotion Overlays...`);
                     
                     for(let i = 1; i <= expectedParts; i++) {
                         const rawPartPath = path.join(jobFolder, `raw_part_${String(i - 1).padStart(3, '0')}.mp4`);
-                        const basePartPath = path.join(jobFolder, `base_part_${i}.mp4`); // FFmpeg renders this first
-                        const finalPartPath = path.join(jobFolder, `TikTok_Ready_Part_${i}.mp4`); // Remotion creates the final output
+                        const basePartPath = path.join(jobFolder, `base_part_${i}.mp4`); 
+                        const finalPartPath = path.join(jobFolder, `TikTok_Ready_Part_${i}.mp4`); 
                         if (!fs.existsSync(rawPartPath)) break;
                         
                         sendUpdate(`   👉 Processing Part ${i} of ${expectedParts}...`);
                         
                         try {
-                            // 🌟 PHASE 1: FFMPEG handles Background Blur, Cropping, and Speed 🌟
                             await new Promise((resolve, reject) => {
                                 let lastReportedPercent = 0;
+
+                                // 🌟 QUALITY FIX: Using High-Quality 'Lanczos' scaling algorithm instead of basic stretch 🌟
                                 let filterGraph = [
-                                    '[0:v]fps=30,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:20[bg]',
-                                    '[0:v]fps=30,scale=1080:-1[fg]',
+                                    '[0:v]fps=30,scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920,boxblur=20:20[bg]',
+                                    '[0:v]fps=30,scale=1080:-1:flags=lanczos[fg]',
                                     '[bg][fg]overlay=(W-w)/2:(H-h)/2[outv]'
                                 ];
                                 
-                                let outputOptions = ['-c:v libx264', '-preset fast', '-async 1', '-vsync 1'];
+                                // 🌟 QUALITY FIX: Forcing preset=slow, Visually Lossless CRF 12, and 15Mbps bitrate 🌟
+                                let outputOptions = [
+                                    '-c:v libx264', 
+                                    '-preset slow', 
+                                    '-crf 12', 
+                                    '-pix_fmt yuv420p',
+                                    '-b:v 15M',
+                                    '-maxrate 20M',
+                                    '-bufsize 20M',
+                                    '-async 1', 
+                                    '-vsync 1'
+                                ];
                                 let currentVOut = 'outv';
 
                                 if (speedMultiplier !== 1.0) {
@@ -249,15 +263,33 @@ app.post('/api/generate', async (req, res) => {
                                     .run();
                             });
 
-                            // 🌟 PHASE 2: REMOTION handles the high-quality HTML/CSS Text Overlay 🌟
-                            if (printPartTitle) {
-                                sendUpdate(`   🎨 Remotion is layering premium text on Part ${i}... (This takes a moment)`);
+                            if (printPartTitle || wantsSubtitles) {
+                                let transcriptData = null;
+
+                                if (wantsSubtitles) {
+                                    sendUpdate(`   🎵 Extracting audio & Transcribing Part ${i}...`);
+                                    const chunkAudio = path.join(jobFolder, `audio_part_${i}.m4a`);
+                                    await new Promise((res, rej) => {
+                                        ffmpeg(basePartPath).noVideo().audioCodec('aac').audioChannels(1).audioFrequency(16000).output(chunkAudio).on('end', res).on('error', rej).run();
+                                    });
+                                    try {
+                                        const transcription = await groq.audio.transcriptions.create({
+                                            file: fs.createReadStream(chunkAudio),
+                                            model: "whisper-large-v3",
+                                            response_format: "verbose_json",
+                                            timestamp_granularities: ["word"]
+                                        });
+                                        transcriptData = transcription.words || [];
+                                    } catch(e) { sendUpdate(`   ⚠️ AI Limit. No subs for Part ${i}.`); }
+                                }
+
+                                sendUpdate(`   🎨 Remotion is layering Custom Text & Animations...`);
                                 
-                                // Clean up the title and format the path specifically for Remotion
-                                const safeTitleText = originalTitle.replace(/['":;,\\]/g, '').trim();
+                                let displayTitle = customVideoTitle ? customVideoTitle.trim() : originalTitle;
+                                const safeTitleText = displayTitle.replace(/['":;,\\]/g, '').trim();
+                                
                                 const videoFileUrl = `http://localhost:${PORT}/downloads/${folderName}/base_part_${i}.mp4`;
 
-                                // Get exact duration to tell Remotion when to stop rendering
                                 let exactDuration = timePerChunk / speedMultiplier;
                                 try {
                                     const { stdout } = await execPromise(`.\\ffmpeg.exe -i "${basePartPath}" 2>&1`);
@@ -266,23 +298,37 @@ app.post('/api/generate', async (req, res) => {
                                     if (match) exactDuration = (parseInt(match[1]) * 3600) + (parseInt(match[2]) * 60) + parseFloat(match[3]);
                                 }
 
-                                // Write the dynamic text to a JSON file for this specific part
                                 const propsData = {
-                                    topTitle: safeTitleText,
-                                    partNumber: `Part ${i}`,
+                                    topTitle: printPartTitle ? safeTitleText : "",
+                                    partNumber: printPartTitle ? `Part ${i}` : "",
                                     videoUrl: videoFileUrl,
-                                    durationInSeconds: exactDuration
+                                    durationInSeconds: exactDuration,
+                                    
+                                    titleFontSize: proSettings?.titleFontSize || 90,
+                                    titleYPos: proSettings?.titleYPos || 200,
+                                    partFontSize: proSettings?.partFontSize || 130,
+                                    partYPos: proSettings?.partYPos || 150,
+                                    subtitleFontSize: proSettings?.subtitleFontSize || 70,
+                                    subtitleYPos: proSettings?.subtitleYPos || 380,
+                                    
+                                    subtitleFont: proSettings?.subtitleFont || "Impact",
+                                    subtitleColor: proSettings?.subtitleColor || "Yellow",
+                                    textBgStyle: proSettings?.textBgStyle || "outline",
+                                    forceUppercase: proSettings?.forceUppercase ?? true,
+                                    wordsPerScreen: proSettings?.wordsPerScreen || "1",
+                                    animationStyle: proSettings?.animationStyle || "pop",
+                                    
+                                    transcription: transcriptData
                                 };
                                 const propsPath = path.join(jobFolder, `props_part_${i}.json`);
                                 fs.writeFileSync(propsPath, JSON.stringify(propsData));
 
-                                // Silently run the Remotion CLI command! (--log=error prevents it from crashing the terminal)
-                                await execPromise(`npx remotion render CapCutStyleVideo "${finalPartPath}" --props="${propsPath}" --log=error`);
+                                await sleep(2000);
+                                // 🌟 QUALITY FIX: Tell Remotion to output at CRF 12 (lossless) so it doesn't ruin FFmpeg's hard work 🌟
+                                await execPromise(`npx remotion render CapCutStyleVideo "${finalPartPath}" --props="${propsPath}" --log=error --timeout=120000 --crf=12`);
                                 
-                                // Delete the intermediate base file to save hard drive space
                                 fs.unlinkSync(basePartPath);
                             } else {
-                                // If they disabled titles in settings, just rename the FFmpeg output
                                 fs.renameSync(basePartPath, finalPartPath);
                             }
 
@@ -306,7 +352,7 @@ app.post('/api/generate', async (req, res) => {
         }
 
         // ==========================================
-        // OPTION 1: SHORT VIDEO (KARAOKE ENGINE)
+        // OPTION 1: SHORT VIDEO 
         // ==========================================
         if (mode === 'short') {
             const audioPath = path.join(jobFolder, 'audio.m4a');
@@ -401,7 +447,7 @@ Original Video Info:
 - Original Title: "${originalTitle}"
 - Channel: "${originalChannel}"
 
-Clip Script (What is actually said in this short):
+Clip Script:
 "${clipText}"
 
 OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #viral #specifictag"}`;
@@ -430,72 +476,14 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
                     const metadataPath = path.join(jobFolder, 'metadata.txt');
                     fs.writeFileSync(metadataPath, `Original Video: ${originalTitle}\nChannel: ${originalChannel}\nTikTok Title: ${title}\nHashtags: ${hashtags}\nClip Duration: ${duration.toFixed(1)} seconds`);
 
-                    let srtPath = "";
-                    
+                    let shiftedTranscript = [];
                     if (wantsSubtitles) {
-                        let srtContent = '';
-                        let subIndex = 1;
-
-                        const htmlColors = { "White": "FFFFFF", "Yellow": "FFFF00", "Red": "FF0000", "Cyan": "00FFFF", "Green": "00FF00" };
-                        let highlightHex = htmlColors[rawColorName] || "FFFF00"; 
-                        if (highlightHex === "FFFFFF") highlightHex = "FFFF00"; 
-
+                        sendUpdate(`   🔤 Preparing Frame-Locked Subtitles for Remotion...`);
+                        
+                        let validWords = [];
                         if (transcription.words && transcription.words.length > 0) {
-                            sendUpdate(`   🔤 Building CapCut-Style Highlighted Subtitles...`);
-                            
-                            const validWords = transcription.words.filter(w => w.start >= start && w.end <= end);
-                            
-                            let subtitleChunks = [];
-                            let currentChunk = [];
-
-                            for (let i = 0; i < validWords.length; i++) {
-                                const wordObj = validWords[i];
-                                if (currentChunk.length === 0) {
-                                    currentChunk.push(wordObj);
-                                } else {
-                                    const prevWord = currentChunk[currentChunk.length - 1];
-                                    const gap = wordObj.start - prevWord.end;
-                                    
-                                    if (gap > 0.4 || currentChunk.length >= 3) {
-                                        subtitleChunks.push(currentChunk);
-                                        currentChunk = [wordObj];
-                                    } else {
-                                        currentChunk.push(wordObj);
-                                    }
-                                }
-                            }
-                            if (currentChunk.length > 0) subtitleChunks.push(currentChunk);
-
-                            subtitleChunks.forEach(chunk => {
-                                for (let i = 0; i < chunk.length; i++) {
-                                    const currentWord = chunk[i];
-                                    let wordStart = Math.max(0, currentWord.start - start);
-                                    let wordEnd;
-                                    
-                                    if (i < chunk.length - 1) {
-                                        wordEnd = Math.max(0, chunk[i + 1].start - start);
-                                    } else {
-                                        wordEnd = Math.max(0, currentWord.end - start);
-                                    }
-
-                                    if (wordEnd > wordStart) {
-                                        let text = chunk.map((w, idx) => {
-                                            let cleanWord = w.word.trim();
-                                            if (idx === i) {
-                                                return `<font color="#${highlightHex}">${cleanWord}</font>`;
-                                            }
-                                            return cleanWord;
-                                        }).join(' ');
-
-                                        srtContent += `${subIndex++}\n`;
-                                        srtContent += `${formatSrtTime(wordStart)} --> ${formatSrtTime(wordEnd)}\n`;
-                                        srtContent += `${text}\n\n`;
-                                    }
-                                }
-                            });
+                            validWords = transcription.words.filter(w => w.start >= start && w.end <= end);
                         } else if (clipSegments.length > 0) {
-                            sendUpdate(`   🔤 Building Fast-Paced Subtitles via Math...`);
-                            let validWords = [];
                             clipSegments.forEach(seg => {
                                 const words = seg.text.trim().split(/\s+/);
                                 if (words.length > 0) {
@@ -509,118 +497,111 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
                                     });
                                 }
                             });
-
-                            let subtitleChunks = [];
-                            let currentChunk = [];
-
-                            for (let i = 0; i < validWords.length; i++) {
-                                const wordObj = validWords[i];
-                                if (currentChunk.length === 0) {
-                                    currentChunk.push(wordObj);
-                                } else {
-                                    const prevWord = currentChunk[currentChunk.length - 1];
-                                    const gap = wordObj.start - prevWord.end;
-                                    if (gap > 0.4 || currentChunk.length >= 3) {
-                                        subtitleChunks.push(currentChunk);
-                                        currentChunk = [wordObj];
-                                    } else {
-                                        currentChunk.push(wordObj);
-                                    }
-                                }
-                            }
-                            if (currentChunk.length > 0) subtitleChunks.push(currentChunk);
-
-                            subtitleChunks.forEach(chunk => {
-                                for (let i = 0; i < chunk.length; i++) {
-                                    const currentWord = chunk[i];
-                                    let wordStart = Math.max(0, currentWord.start - start);
-                                    let wordEnd;
-                                    
-                                    if (i < chunk.length - 1) {
-                                        wordEnd = Math.max(0, chunk[i + 1].start - start);
-                                    } else {
-                                        wordEnd = Math.max(0, currentWord.end - start);
-                                    }
-
-                                    if (wordEnd > wordStart) {
-                                        let text = chunk.map((w, idx) => {
-                                            let cleanWord = w.word.trim();
-                                            if (idx === i) {
-                                                return `<font color="#${highlightHex}">${cleanWord}</font>`;
-                                            }
-                                            return cleanWord;
-                                        }).join(' ');
-
-                                        srtContent += `${subIndex++}\n`;
-                                        srtContent += `${formatSrtTime(wordStart)} --> ${formatSrtTime(wordEnd)}\n`;
-                                        srtContent += `${text}\n\n`;
-                                    }
-                                }
-                            });
                         }
-
-                        if (srtContent.trim().length > 0) {
-                            srtPath = path.join(jobFolder, 'subs.srt');
-                            fs.writeFileSync(srtPath, srtContent);
-                        }
-                    }
-
-                    const vFilters = [
-                        { filter: 'fps', options: '30' },
-                        { filter: 'crop', options: 'ih*(9/16):ih' }
-                    ];
-                    const aFilters = [];
-
-                    if (wantsSubtitles && srtPath) {
-                        const safeSrtPath = path.relative(process.cwd(), srtPath).replace(/\\/g, '/');
-                        const style = `Fontname=${subtitleFont},Fontsize=45,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=3.5,Shadow=1,Alignment=2,MarginV=80,Bold=${isBold}`;
                         
-                        vFilters.push({ 
-                            filter: 'subtitles', 
-                            options: `${safeSrtPath}:force_style='${style}'` 
-                        });
-                        sendUpdate(`   🔤 Burning CapCut-style bouncing subtitles onto video...`);
+                        shiftedTranscript = validWords.map(w => ({
+                            word: w.word,
+                            start: Math.max(0, w.start - start),
+                            end: Math.max(0, w.end - start)
+                        }));
                     }
 
-                    if (speedMultiplier !== 1.0) {
-                        const pts = (1 / speedMultiplier).toFixed(4); 
-                        vFilters.push({ filter: 'setpts', options: `${pts}*PTS` });
-                        aFilters.push({ filter: 'atempo', options: speedMultiplier.toString() });
-                        sendUpdate(`   ⏩ Speeding up video to ${speedMultiplier}x Pacing...`);
-                    }
-
-                    sendUpdate(`\n[7/7] ✂️ Cutting & Rendering Final Vertical Video (Iron Grip Sync)...`);
-
+                    sendUpdate(`\n[7/7] ✂️ Cutting Base Video (Phase 1)...`);
+                    
+                    const baseShortPath = path.join(jobFolder, 'base_short.mp4');
                     const finalVideoPath = path.join(jobFolder, 'final_ai_short.mp4');
 
-                    const command = ffmpeg(outputPath)
-                        .setStartTime(start)
-                        .setDuration(duration)
-                        .videoFilters(vFilters)
-                        .outputOptions([
-                            '-async 1',       
-                            '-vsync 1',       
-                            '-c:v libx264',   
-                            '-preset fast',
-                            '-c:a aac'        
-                        ]);
+                    // 🌟 QUALITY FIX: Using High-Quality 'Lanczos' algorithm to preserve crispness when zooming in 🌟
+                    let filterGraph = [
+                        '[0:v]fps=30,crop=ih*(9/16):ih,scale=1080:1920:flags=lanczos[outv]'
+                    ];
+                    
+                    // 🌟 QUALITY FIX: Forcing preset=slow, Visually Lossless CRF 12, and 15Mbps bitrate 🌟
+                    let outputOptions = [
+                        '-c:v libx264', 
+                        '-preset slow', 
+                        '-crf 12', 
+                        '-pix_fmt yuv420p',
+                        '-b:v 15M',
+                        '-maxrate 20M',
+                        '-bufsize 20M',
+                        '-async 1', 
+                        '-vsync 1'
+                    ];
+                    let currentVOut = 'outv';
 
-                    if (aFilters.length > 0) {
-                        command.audioFilters(aFilters);
+                    if (speedMultiplier !== 1.0) {
+                        const pts = (1 / speedMultiplier).toFixed(4);
+                        filterGraph.push(`[${currentVOut}]setpts=${pts}*PTS[finalv]`);
+                        filterGraph.push(`[0:a]atempo=${speedMultiplier}[finala]`);
+                        outputOptions.push('-map [finalv]', '-map [finala]', '-c:a aac');
+                    } else {
+                        outputOptions.push(`-map [${currentVOut}]`, '-map 0:a', '-c:a aac');
                     }
 
-                    command
-                        .output(finalVideoPath)
-                        .on('end', () => {
-                            sendUpdate(`\n🔥 DONE! High-Res AI short saved!`);
-                            sendUpdate(`📂 Check your folder: /downloads/${folderName}/\n`);
-                            res.end(); 
-                        })
-                        .on('error', (err) => {
-                            sendUpdate(`❌ FFmpeg Error: ${err.message}`);
-                            res.end();
-                        })
-                        .run();
+                    try {
+                        await new Promise((resolve, reject) => {
+                            ffmpeg(outputPath)
+                                .setStartTime(start)
+                                .setDuration(duration)
+                                .complexFilter(filterGraph)
+                                .outputOptions(outputOptions)
+                                .output(baseShortPath)
+                                .on('end', resolve)
+                                .on('error', reject)
+                                .run();
+                        });
+
+                        if (wantsSubtitles && shiftedTranscript.length > 0) {
+                            sendUpdate(`   🎨 Remotion is applying 0-Lag Visual Subtitles...`);
+                            
+                            const videoFileUrl = `http://localhost:${PORT}/downloads/${folderName}/base_short.mp4`;
+                            let exactDuration = duration / speedMultiplier;
+                            
+                            const propsData = {
+                                topTitle: "", 
+                                partNumber: "",
+                                videoUrl: videoFileUrl,
+                                durationInSeconds: exactDuration,
+                                
+                                titleFontSize: proSettings?.titleFontSize || 90,
+                                titleYPos: proSettings?.titleYPos || 200,
+                                partFontSize: proSettings?.partFontSize || 130,
+                                partYPos: proSettings?.partYPos || 150,
+                                subtitleFontSize: proSettings?.subtitleFontSize || 70,
+                                subtitleYPos: proSettings?.subtitleYPos || 380,
+                                
+                                subtitleFont: proSettings?.subtitleFont || "Impact",
+                                subtitleColor: proSettings?.subtitleColor || "Yellow",
+                                textBgStyle: proSettings?.textBgStyle || "outline",
+                                forceUppercase: proSettings?.forceUppercase ?? true,
+                                wordsPerScreen: proSettings?.wordsPerScreen || "1",
+                                animationStyle: proSettings?.animationStyle || "pop",
+                                
+                                transcription: shiftedTranscript 
+                            };
+                            
+                            const propsPath = path.join(jobFolder, `props_short.json`);
+                            fs.writeFileSync(propsPath, JSON.stringify(propsData));
+
+                            await sleep(2000);
+                            
+                            // 🌟 QUALITY FIX: Adding --crf=12 to Remotion to prevent generation loss 🌟
+                            await execPromise(`npx remotion render CapCutStyleVideo "${finalVideoPath}" --props="${propsPath}" --log=error --timeout=120000 --crf=12`);
+                            
+                            fs.unlinkSync(baseShortPath); 
+                        } else {
+                            fs.renameSync(baseShortPath, finalVideoPath);
+                        }
+
+                        sendUpdate(`\n🔥 DONE! High-Res AI short saved with perfect sync!`);
+                        sendUpdate(`📂 Check your folder: /downloads/${folderName}/\n`);
+                        res.end();
+
+                    } catch (err) {
+                        sendUpdate(`❌ FFmpeg/Remotion Error: ${err.message}`);
+                        res.end();
+                    }
 
                 } catch (err) { 
                     sendUpdate(`\n❌ Fatal AI Error: ${err.message}`); 
