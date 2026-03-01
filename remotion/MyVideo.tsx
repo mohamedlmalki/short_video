@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { AbsoluteFill, Video, interpolate, useCurrentFrame, useVideoConfig, spring } from "remotion";
+import { AbsoluteFill, Video, useCurrentFrame, useVideoConfig, spring, interpolate } from "remotion";
 
 export const MyVideo = ({ 
   topTitle, partNumber, videoUrl,
@@ -13,6 +13,7 @@ export const MyVideo = ({
 }: any) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
+  const currentTime = frame / fps;
 
   const colors: any = {
     White: "#ffffff",
@@ -23,170 +24,163 @@ export const MyVideo = ({
   };
   const highlightHex = colors[subtitleColor] || "#ffff00";
 
-  // 🌟 FRAME-LOCKED CHUNK GROUPING (ZERO LAG) 🌟
-  // This converts messy AI seconds directly into absolute video frames
-  const chunks = useMemo(() => {
+  // ==========================================
+  // 🏆 THE OFFICIAL REMOTION TIKTOK PAGINATION 🏆
+  // ==========================================
+  const pages = useMemo(() => {
     if (!transcription || transcription.length === 0) return [];
-    const result = [];
-    let currentChunk = [];
     
+    const result = [];
+    let currentPage: any[] = [];
+    
+    let wordsLimit = 1;
+    if (wordsPerScreen === "3") wordsLimit = 3;
+    if (wordsPerScreen === "full") wordsLimit = 7; // Standard TikTok sentence length
+
     for (let i = 0; i < transcription.length; i++) {
-      const word = transcription[i];
+      const item = transcription[i];
       
-      // Convert floating seconds to exact integer frames!
-      const startFrame = Math.round(word.start * fps);
-      let endFrame = Math.round(word.end * fps);
-      
-      currentChunk.push({ text: word.word, startFrame, endFrame });
-      
-      let maxWords = 1;
-      if (wordsPerScreen === "3") maxWords = 3;
-      if (wordsPerScreen === "full") maxWords = 8;
+      // Clean up Whisper's silence bugs safely
+      let safeStart = item.start;
+      if (item.end - item.start > 0.8) {
+        safeStart = Math.max(0, item.end - 0.4);
+      }
 
-      const nextWord = transcription[i + 1];
-      const gapSeconds = nextWord ? nextWord.start - word.end : 0;
+      currentPage.push({
+        text: item.word || item.text,
+        start: safeStart,
+        end: item.end,
+      });
 
-      // Cut chunk if word limit reached, OR if there's a pause in the audio
-      if (currentChunk.length >= maxWords || gapSeconds > 0.4 || !nextWord) {
-        
-        // Exact frame to make the text disappear (adds a tiny 150ms visual tail)
-        let chunkEndFrame = currentChunk[currentChunk.length - 1].endFrame + Math.round(fps * 0.15); 
-        
-        // Connect words perfectly if they are speaking fast
-        if (nextWord && gapSeconds <= 0.4) {
-            chunkEndFrame = Math.round(nextWord.start * fps);
-        }
+      const nextItem = transcription[i + 1];
+      const gap = nextItem ? nextItem.start - item.end : 0;
 
+      // Create a new "Page" if we hit the word limit OR if there is a silence gap
+      if (currentPage.length >= wordsLimit || gap > 0.4 || !nextItem) {
         result.push({
-          startFrame: currentChunk[0].startFrame,
-          endFrame: chunkEndFrame, 
-          words: currentChunk
+          start: currentPage[0].start,
+          end: currentPage[currentPage.length - 1].end + 0.15, // Tiny tail so it doesn't vanish instantly
+          words: currentPage,
         });
-        currentChunk = [];
+        currentPage = [];
       }
     }
     return result;
-  }, [transcription, wordsPerScreen, fps]);
+  }, [transcription, wordsPerScreen]);
 
-  // We now search for the EXACT frame match, completely removing any lag
-  const currentChunk = chunks.find(c => frame >= c.startFrame && frame < c.endFrame);
+  // Find the currently active Page
+  const activePage = pages.find((p) => currentTime >= p.start && currentTime < p.end);
 
-  // 🎨 STYLES 🎨
-  const getTextStyle = (isHighlight = false) => {
-    let base: any = {
-      fontFamily: subtitleFont,
-      fontWeight: 900,
-      textTransform: forceUppercase ? "uppercase" : "none",
-      color: isHighlight ? highlightHex : "white",
-      display: "inline-block",
-      margin: "0 6px",
-      transition: "color 0.1s ease-out" 
-    };
-
-    if (textBgStyle === "outline") {
-      base.textShadow = "2px 2px 0 black, -1px -1px 0 black, 4px 4px 6px rgba(0,0,0,0.8)";
-      base.WebkitTextStroke = "2px black";
-    } else if (textBgStyle === "box") {
-      base.textShadow = "none";
-      base.WebkitTextStroke = "0px";
-    } else if (textBgStyle === "shadow") {
-      base.textShadow = "0px 0px 15px rgba(0,0,0,1), 0px 0px 5px rgba(0,0,0,1)";
-      base.WebkitTextStroke = "0.5px rgba(0,0,0,0.5)";
-    } else if (textBgStyle === "3d") {
-      base.textShadow = "5px 5px 0px #000";
-      base.WebkitTextStroke = "2px black";
-    }
-
-    return base;
+  // ==========================================
+  // 🎨 STYLES
+  // ==========================================
+  const getStrokeStyle = () => {
+    if (textBgStyle === "outline") return { textShadow: "2px 2px 0 black, -1px -1px 0 black, 4px 4px 6px rgba(0,0,0,0.8)", WebkitTextStroke: "2px black" };
+    if (textBgStyle === "shadow") return { textShadow: "0px 0px 15px rgba(0,0,0,1), 0px 0px 5px rgba(0,0,0,1)", WebkitTextStroke: "0.5px rgba(0,0,0,0.5)" };
+    if (textBgStyle === "3d") return { textShadow: "5px 5px 0px #000", WebkitTextStroke: "2px black" };
+    return {};
   };
 
-  const entranceScale = spring({ frame, fps, config: { damping: 12, stiffness: 300, mass: 0.2 } });
+  const textBackground = textBgStyle === "box" ? "rgba(0,0,0,0.85)" : "transparent";
+  const textPadding = textBgStyle === "box" ? "12px 24px" : "0";
+  const textRadius = textBgStyle === "box" ? "15px" : "0";
 
-  let subScale = 1;
-  let subTranslateY = 0;
-  let subOpacity = 1;
+  // Global Page Entrance Animation
+  const pageEntranceScale = spring({ frame, fps, config: { damping: 12, stiffness: 300, mass: 0.2 } });
 
-  if (currentChunk) {
-    const frameRelative = Math.max(0, frame - currentChunk.startFrame); 
+  let pageScale = 1;
+  let pageTranslateY = 0;
+  let pageOpacity = 1;
+
+  if (activePage) {
+    const pageStartFrame = Math.round(activePage.start * fps);
+    const frameRelative = Math.max(0, frame - pageStartFrame);
 
     if (animationStyle === "pop") {
-      subScale = spring({ fps, frame: frameRelative, config: { damping: 12, stiffness: 400, mass: 0.2 } });
+      pageScale = spring({ fps, frame: frameRelative, config: { damping: 12, stiffness: 400, mass: 0.2 } });
     } else if (animationStyle === "bounce") {
-      subScale = spring({ fps, frame: frameRelative, config: { damping: 6, stiffness: 400, mass: 0.3 } });
+      pageScale = spring({ fps, frame: frameRelative, config: { damping: 6, stiffness: 400, mass: 0.3 } });
     } else if (animationStyle === "slide") {
-      subTranslateY = interpolate(spring({ fps, frame: frameRelative, config: { damping: 14, stiffness: 300, mass: 0.2 } }), [0, 1], [30, 0]);
-      subOpacity = spring({ fps, frame: frameRelative, config: { damping: 14, stiffness: 300 } });
-    } else if (animationStyle === "fade") {
-      subOpacity = interpolate(frameRelative, [0, 8], [0, 1], { extrapolateRight: 'clamp' });
+      pageTranslateY = interpolate(spring({ fps, frame: frameRelative, config: { damping: 14, stiffness: 300 } }), [0, 1], [30, 0]);
+      pageOpacity = spring({ fps, frame: frameRelative, config: { damping: 14, stiffness: 300 } });
     }
   }
 
   return (
     <AbsoluteFill style={{ backgroundColor: "black" }}>
       <AbsoluteFill>
-        {videoUrl ? (
-          <Video src={videoUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-        ) : null}
+        {videoUrl ? <Video src={videoUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
       </AbsoluteFill>
 
       {/* 🔴 TOP TITLE 🔴 */}
       {topTitle && (
         <div style={{ position: "absolute", top: titleYPos, width: "100%", display: "flex", justifyContent: "center", zIndex: 10 }}>
           <div style={{
-            ...getTextStyle(false),
-            fontSize: titleFontSize,
-            textAlign: "center",
-            maxWidth: "85%",
-            lineHeight: "1.15",
-            whiteSpace: "pre-wrap",
-            transform: `scale(${entranceScale})`,
-            backgroundColor: textBgStyle === "box" ? "rgba(0,0,0,0.85)" : "transparent",
-            padding: textBgStyle === "box" ? "15px 30px" : "0",
-            borderRadius: textBgStyle === "box" ? "15px" : "0",
+            fontFamily: subtitleFont, fontWeight: 900, textTransform: forceUppercase ? "uppercase" : "none", color: "white",
+            fontSize: titleFontSize, textAlign: "center", maxWidth: "85%", lineHeight: "1.1", whiteSpace: "pre-wrap",
+            transform: `scale(${pageEntranceScale})`, backgroundColor: textBackground, padding: textPadding, borderRadius: textRadius,
+            ...getStrokeStyle()
           }}>
             {topTitle}
           </div>
         </div>
       )}
 
-      {/* 🔴 SUBTITLES WITH HORMOZI ACTIVE-WORD PUMP 🔴 */}
-      {currentChunk && (
+      {/* 🔴 SUBTITLES (OFFICIAL TIKTOK TEMPLATE RENDERER) 🔴 */}
+      {activePage && (
         <div style={{ position: "absolute", bottom: subtitleYPos, width: "100%", display: "flex", justifyContent: "center", zIndex: 10 }}>
           <div style={{
-            display: "flex",
-            flexWrap: "wrap",
-            justifyContent: "center",
-            alignItems: "center",
-            textAlign: "center",
-            maxWidth: "90%",
-            transform: `scale(${subScale}) translateY(${subTranslateY}px)`,
-            opacity: subOpacity,
-            backgroundColor: textBgStyle === "box" ? "rgba(0,0,0,0.85)" : "transparent",
-            padding: textBgStyle === "box" ? "10px 20px" : "0",
-            borderRadius: textBgStyle === "box" ? "15px" : "0",
+            display: "flex", flexWrap: "wrap", justifyContent: "center", alignItems: "center", textAlign: "center",
+            maxWidth: "90%", lineHeight: "1.2",
+            transform: `scale(${pageScale}) translateY(${pageTranslateY}px)`, opacity: pageOpacity,
+            backgroundColor: textBackground, padding: textPadding, borderRadius: textRadius,
           }}>
-            {currentChunk.words.map((w: any, idx: number) => {
-              const nextWord = currentChunk.words[idx + 1];
-              const highlightEndFrame = nextWord ? nextWord.startFrame : w.endFrame + Math.round(fps * 0.15);
-              const isHighlighted = frame >= w.startFrame && frame < highlightEndFrame;
+            {activePage.words.map((w: any, idx: number) => {
               
-              // 🔥 WORD-LEVEL PUMP (Frame Locked) 🔥
-              let activeWordScale = 1.0;
-              if (wordsPerScreen !== "1" && isHighlighted) {
-                const wordRelativeFrame = Math.max(0, frame - w.startFrame);
-                activeWordScale = interpolate(
-                  spring({ fps, frame: wordRelativeFrame, config: { damping: 12, stiffness: 400, mass: 0.2 } }),
-                  [0, 1],
-                  [1.0, 1.15] // Pumps from 1.0 to 1.15 scale instantly
-                );
+              // Exactly match the time to see if the word is actively being spoken
+              const isActive = currentTime >= w.start && currentTime < w.end;
+              const isPast = currentTime >= w.end;
+
+              // Base state: White and normal size
+              let wordColor = "white";
+              let wordScale = 1.0;
+              let wordY = 0;
+              
+              if (wordsPerScreen !== "1") {
+                  // The CapCut trick: Dim words that haven't been spoken yet
+                  if (!isActive && !isPast) {
+                      wordColor = "rgba(255, 255, 255, 0.5)"; 
+                  }
+                  
+                  // Highlight and pop the active word
+                  if (isActive) {
+                      wordColor = highlightHex;
+                      // Instantly pop the active word to 110% size and lift it slightly
+                      wordScale = 1.1; 
+                      wordY = -5;
+                  }
+                  
+                  // Once spoken, return to bright white and normal size
+                  if (isPast) {
+                      wordColor = "white";
+                  }
+              } else {
+                  // 1-Word mode stays aggressive
+                  wordColor = isActive ? highlightHex : "white";
               }
 
               return (
-                <span key={idx} style={{ 
-                  ...getTextStyle(isHighlighted), 
+                <span key={idx} style={{
+                  fontFamily: subtitleFont,
+                  fontWeight: 900,
+                  textTransform: forceUppercase ? "uppercase" : "none",
+                  color: wordColor,
                   fontSize: subtitleFontSize,
-                  transform: `scale(${activeWordScale})`,
-                  transformOrigin: "center center",
+                  margin: "0 8px", // Generous margin so words don't crash into each other
+                  display: "inline-block",
+                  transform: `scale(${wordScale}) translateY(${wordY}px)`,
+                  transition: "none", // NO CSS TRANSITIONS (Prevents video rendering lag)
+                  ...getStrokeStyle()
                 }}>
                   {w.text}
                 </span>
@@ -200,12 +194,9 @@ export const MyVideo = ({
       {partNumber && (
         <div style={{ position: "absolute", bottom: partYPos, width: "100%", display: "flex", justifyContent: "center", zIndex: 10 }}>
           <div style={{
-            ...getTextStyle(true), 
-            fontSize: partFontSize,
-            transform: `scale(${entranceScale})`,
-            backgroundColor: textBgStyle === "box" ? "rgba(0,0,0,0.85)" : "transparent",
-            padding: textBgStyle === "box" ? "10px 30px" : "0",
-            borderRadius: textBgStyle === "box" ? "15px" : "0",
+            fontFamily: subtitleFont, fontWeight: 900, textTransform: forceUppercase ? "uppercase" : "none", color: "white",
+            fontSize: partFontSize, transform: `scale(${pageEntranceScale})`, backgroundColor: textBackground, padding: textPadding, borderRadius: textRadius,
+            ...getStrokeStyle()
           }}>
             {partNumber}
           </div>
