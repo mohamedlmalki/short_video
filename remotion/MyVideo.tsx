@@ -38,9 +38,9 @@ export const MyVideo = ({
       let wStart = wordObj.start;
       let wEnd = wordObj.end;
 
-      // Force-clamp Whisper's annoying "silence" bug directly in the milliseconds
+      // Fix Whisper's silence bug: Cap the END time, NEVER push the START time forward!
       if ((wEnd - wStart) > 0.8) {
-          wStart = Math.max(0, wEnd - 0.4); 
+          wEnd = wStart + 0.5; 
       }
 
       currentChunk.push({ 
@@ -56,9 +56,6 @@ export const MyVideo = ({
       const nextWordRaw = transcription[i + 1];
       let nextWordStart = nextWordRaw ? nextWordRaw.start : 0;
       
-      if (nextWordRaw && (nextWordRaw.end - nextWordRaw.start) > 0.8) {
-          nextWordStart = Math.max(0, nextWordRaw.end - 0.4);
-      }
 
       const gapSeconds = nextWordRaw ? nextWordStart - wEnd : 0;
 

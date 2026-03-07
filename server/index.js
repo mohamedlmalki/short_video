@@ -60,14 +60,6 @@ app.delete('/api/jobs/:id', (req, res) => {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-const formatSrtTime = (seconds) => {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 1000);
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
-};
-
 // ==========================================
 // GENERATION ENGINE
 // ==========================================
@@ -120,7 +112,8 @@ app.post('/api/generate', async (req, res) => {
         '-o', outputPath, '--force-overwrites',
         '--no-playlist', 
         '--cookies-from-browser', 'firefox', '--js-runtimes', 'node', 
-        '--extractor-args', 'youtube:player_client=tv', videoUrl
+        // Note: The broken TV client limiter was intentionally removed here to unlock 4K/Maximum Quality
+        videoUrl
     ]);
 
     ytDlpProcess.stdout.on('data', (data) => process.stdout.write(data.toString()));
@@ -136,6 +129,7 @@ app.post('/api/generate', async (req, res) => {
         let speedMultiplier = 1.0;
         let wantsSubtitles = false;
         let printPartTitle = false;
+        let wantsAutoCut = proSettings?.autoCut ?? true; // ✂️ Auto-Cut Defaults to TRUE
         
         let subtitleFont = "Impact";
         let isBold = "1";
@@ -157,7 +151,7 @@ app.post('/api/generate', async (req, res) => {
         }
 
         // ==========================================
-        // OPTION 2: SPLIT VIDEO (UNTOUCHED)
+        // OPTION 2: SPLIT VIDEO 
         // ==========================================
         if (mode === 'split') {
             let timePerChunk = parseInt(chunkDuration) || 60;
@@ -209,7 +203,7 @@ app.post('/api/generate', async (req, res) => {
 
                                 let filterGraph = [
                                     '[0:v]fps=30,scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920,boxblur=20:20[bg]',
-                                    '[0:v]fps=30,scale=1080:-1:flags=lanczos[fg]',
+                                    '[0:v]fps=30,crop=ih:ih,scale=1080:1080:flags=lanczos[fg]',
                                     '[bg][fg]overlay=(W-w)/2:(H-h)/2[outv]'
                                 ];
                                 
@@ -274,7 +268,10 @@ app.post('/api/generate', async (req, res) => {
                                             file: fs.createReadStream(chunkAudio),
                                             model: "whisper-large-v3",
                                             response_format: "verbose_json",
-                                            timestamp_granularities: ["word"]
+                                            timestamp_granularities: ["word"],
+                                            temperature: 0.0,
+                                            language: "en",
+                                            prompt: "Ignore all background noise, music, gunshots, and screams. Only transcribe clear spoken words. Do not output anything for silence."
                                         });
                                         transcriptData = transcription.words || [];
                                     } catch(e) { sendUpdate(`   ⚠️ AI Limit. No subs for Part ${i}.`); }
@@ -348,7 +345,7 @@ app.post('/api/generate', async (req, res) => {
         }
 
         // ==========================================
-        // OPTION 1: SHORT MODE (WITH WHISPER DELAY FIX)
+        // OPTION 1: SHORT MODE 
         // ==========================================
         if (mode === 'short') {
             const audioPath = path.join(jobFolder, 'audio.m4a');
@@ -372,7 +369,10 @@ app.post('/api/generate', async (req, res) => {
                         file: fs.createReadStream(audioPath),
                         model: "whisper-large-v3",
                         response_format: "verbose_json",
-                        timestamp_granularities: ["segment", "word"] 
+                        timestamp_granularities: ["segment", "word"],
+                        temperature: 0.0,
+                        language: "en",
+                        prompt: "Ignore all background noise, music, gunshots, and screams. Only transcribe clear spoken words. Do not output anything for silence."
                     });
                     
                     sendUpdate(`✅ Transcription Complete!`);
@@ -473,8 +473,9 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
                     fs.writeFileSync(metadataPath, `Original Video: ${originalTitle}\nChannel: ${originalChannel}\nTikTok Title: ${title}\nHashtags: ${hashtags}\nClip Duration: ${duration.toFixed(1)} seconds`);
 
                     let shiftedTranscript = [];
-                    if (wantsSubtitles) {
-                        sendUpdate(`   🔤 Preparing Frame-Locked Subtitles for Remotion...`);
+                    // ✂️ Prepare timings if we need Subtitles OR Auto-Cut
+                    if (wantsSubtitles || wantsAutoCut) {
+                        sendUpdate(`   🔤 Preparing Frame-Locked Audio timings...`);
                         
                         let validWords = [];
                         if (transcription.words && transcription.words.length > 0) {
@@ -495,10 +496,8 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
                             });
                         }
                         
-                        // 🌟 SYNC FIX: We add 0.15s (150ms) to the start time to cancel out the leading silence Whisper captured!
                         shiftedTranscript = validWords.map(w => {
                             let adjustedStart = w.start - start + 0.15;
-                            // Failsafe so the start never accidentally gets pushed past the end!
                             if (adjustedStart >= (w.end - start)) {
                                 adjustedStart = w.start - start;
                             }
@@ -516,17 +515,17 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
                     const finalVideoPath = path.join(jobFolder, 'final_ai_short.mp4');
 
                     let filterGraph = [
-                        '[0:v]fps=30,crop=ih*(9/16):ih,scale=1080:1920:flags=lanczos[outv]'
+                        '[0:v]fps=30,crop=ih*(9/16):ih,scale=1080:1920:flags=lanczos,unsharp=5:5:1.0:5:5:0.0[outv]'
                     ];
                     
                     let outputOptions = [
                         '-c:v libx264', 
                         '-preset slow', 
-                        '-crf 16', 
+                        '-crf 12', 
                         '-pix_fmt yuv420p',
-                        '-b:v 15M',
-                        '-maxrate 20M',
-                        '-bufsize 20M',
+                        '-b:v 30M',
+                        '-maxrate 45M',
+                        '-bufsize 45M',
                         '-async 1', 
                         '-vsync 1'
                     ];
@@ -593,6 +592,84 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
                             fs.unlinkSync(baseShortPath); 
                         } else {
                             fs.renameSync(baseShortPath, finalVideoPath);
+                        }
+
+                        // ==========================================
+                        // ✨ EXTRA: AUTO-CUT SILENCES (JUMP CUTS) ✨
+                        // ==========================================
+                        if (wantsAutoCut && shiftedTranscript.length > 0) {
+                            sendUpdate(`\n[8/8] ✂️ AUTO-CUT: Scanning for dead air...`);
+                            
+                            const SILENCE_GAP = 0.55; // Gap of 0.55s triggers a cut
+                            const PAD_START = 0.1;    // Keep 0.1s before a word starts
+                            const PAD_END = 0.2;      // Keep 0.2s after a word ends
+                            
+                            let keepIntervals = [];
+                            
+                            // 1. Group words together into "Keep" zones
+                            shiftedTranscript.forEach(w => {
+                                let wordStartScaled = w.start / speedMultiplier;
+                                let wordEndScaled = w.end / speedMultiplier;
+                                
+                                let s = Math.max(0, wordStartScaled - PAD_START);
+                                let e = wordEndScaled + PAD_END;
+                                
+                                if (keepIntervals.length === 0) {
+                                    keepIntervals.push({ start: s, end: e });
+                                } else {
+                                    let last = keepIntervals[keepIntervals.length - 1];
+                                    if (s - last.end < SILENCE_GAP) {
+                                        last.end = Math.max(last.end, e); // Merge close words
+                                    } else {
+                                        keepIntervals.push({ start: s, end: e }); // New segment
+                                    }
+                                }
+                            });
+
+                            // 2. Instruct FFmpeg to chop out everything not in the "Keep" zones
+                            if (keepIntervals.length > 1) {
+                                sendUpdate(`   🔪 Found ${keepIntervals.length - 1} silences! Applying Jump-Cuts...`);
+                                
+                                let complexFilter = "";
+                                let concatInputs = "";
+
+                                keepIntervals.forEach((interval, index) => {
+                                    complexFilter += `[0:v]trim=start=${interval.start.toFixed(3)}:end=${interval.end.toFixed(3)},setpts=PTS-STARTPTS[v${index}]; `;
+                                    complexFilter += `[0:a]atrim=start=${interval.start.toFixed(3)}:end=${interval.end.toFixed(3)},asetpts=PTS-STARTPTS[a${index}]; `;
+                                    concatInputs += `[v${index}][a${index}]`;
+                                });
+
+                                complexFilter += `${concatInputs}concat=n=${keepIntervals.length}:v=1:a=1[outv][outa]`;
+
+                                const jumpCutPath = path.join(jobFolder, 'final_ai_short_jumpcut.mp4');
+
+                                try {
+                                    await new Promise((resolve, reject) => {
+                                        ffmpeg(finalVideoPath)
+                                            .complexFilter(complexFilter)
+                                            .outputOptions([
+                                                '-map [outv]',
+                                                '-map [outa]',
+                                                '-c:v libx264',
+                                                '-preset fast',
+                                                '-crf 12', 
+                                                '-c:a aac'
+                                            ])
+                                            .output(jumpCutPath)
+                                            .on('end', resolve)
+                                            .on('error', reject)
+                                            .run();
+                                    });
+
+                                    fs.unlinkSync(finalVideoPath);
+                                    fs.renameSync(jumpCutPath, finalVideoPath);
+                                    sendUpdate(`   ✅ Jump-Cuts applied perfectly!`);
+                                } catch (cutErr) {
+                                    sendUpdate(`   ⚠️ Jump-Cut skipped due to FFmpeg error: ${cutErr.message}`);
+                                }
+                            } else {
+                                sendUpdate(`   ✅ Video is already fast-paced! No dead air found.`);
+                            }
                         }
 
                         sendUpdate(`\n🔥 DONE! High-Res AI short saved with perfect sync!`);
