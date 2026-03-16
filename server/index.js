@@ -9,6 +9,8 @@ import dotenv from 'dotenv';
 import ffmpeg from 'fluent-ffmpeg';
 import Groq from 'groq-sdk';
 
+import googleTrends from 'google-trends-api';
+
 dotenv.config();
 
 const app = express();
@@ -688,6 +690,130 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
             }).run();
         }
     });
+});
+
+// 🤖 AI TREND STUDIO ENGINE (VEO & SORA)
+// ==========================================
+app.post('/api/generate-ai-video', async (req, res) => {
+    const { topic, engine, trendSource } = req.body;
+    
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive'
+    });
+
+    const sendUpdate = (message) => {
+        console.log(message);
+        res.write(`data: ${JSON.stringify({ message })}\n\n`);
+    };
+
+    sendUpdate(`\n========================================`);
+    sendUpdate(`🚀 NEW AI STUDIO JOB STARTED`);
+    sendUpdate(`========================================\n`);
+
+    try {
+        let finalTopic = topic;
+
+        // 1. FETCH TRENDS IF NEEDED
+        if (topic === "Auto-Scrape Viral Trends" || !topic) {
+            sendUpdate(`[1/4] 🌍 Fetching live trends from ${trendSource}...`);
+            
+            if (trendSource === "reddit") {
+                // ADDED DISGUISE: User-Agent makes Reddit think we are a normal Chrome browser
+                const redditRes = await fetch('https://www.reddit.com/r/popculturechat/top.json?limit=10&t=day', {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+                    }
+                });
+                
+                const rawRedditText = await redditRes.text();
+                try {
+                    const redditData = JSON.parse(rawRedditText);
+                    finalTopic = redditData.data.children.map(c => c.data.title).join('\n');
+                    sendUpdate(`✅ Scraped top daily Reddit posts!`);
+                } catch (e) {
+                    console.log("Reddit Error HTML:", rawRedditText.substring(0, 100));
+                    throw new Error("Reddit blocked the request. Try typing a custom topic!");
+                }
+            } else {
+                // GOOGLE TRENDS FIX: Safe parsing
+                try {
+                    const trends = await googleTrends.dailyTrends({ geo: 'US' });
+                    const trendsObj = JSON.parse(trends);
+                    
+                    // Dig into Google's specific JSON structure safely
+                    if (trendsObj && trendsObj.default && trendsObj.default.trendingSearchesDays) {
+                        finalTopic = trendsObj.default.trendingSearchesDays[0].trendingSearches.map(s => s.title.query).join(', ');
+                        sendUpdate(`✅ Scraped top Google searches!`);
+                    } else {
+                        throw new Error("Google returned empty trend data.");
+                    }
+                } catch (e) {
+                    throw new Error("Google Trends threw a CAPTCHA block. Please switch to Reddit or type a custom topic!");
+                }
+            }
+        } else {
+            sendUpdate(`[1/4] 🎯 Using custom topic: "${topic}"`);
+        }
+
+        // 2. GROQ PROMPT ENGINEERING & ROUTING
+        sendUpdate(`\n[2/4] 🧠 Groq Llama-3.3-70B is writing the cinematic prompt...`);
+        const aiPrompt = `You are an elite AI video director. 
+        Read these trending topics/inputs: "${finalTopic}"
+        
+        Create ONE highly visual, cinematic prompt for an AI video generator (like Sora or Veo) based on this trend. 
+        The prompt must be highly detailed but under 600 characters. 
+        Also, choose the best engine. Use "veo" for photorealism/faces/physics. Use "sora" for drone shots, 3D animation, or surrealism.
+        
+        Respond ONLY in JSON format like this: {"prompt": "your cinematic prompt...", "engine": "veo"}`;
+
+        const promptGen = await groq.chat.completions.create({
+            model: "llama-3.3-70b-versatile",
+            messages: [{ role: "system", content: aiPrompt }],
+            response_format: { type: "json_object" }
+        });
+        
+        const aiResult = JSON.parse(promptGen.choices[0].message.content);
+        const generatedPrompt = aiResult.prompt;
+        
+        // If the user picked "auto", let the AI decide. Otherwise, force the user's choice.
+        const targetEngine = engine === "auto" ? aiResult.engine : engine;
+
+        sendUpdate(`✅ Prompt Written: "${generatedPrompt}"`);
+        sendUpdate(`✅ AI Routed to Engine: [${targetEngine.toUpperCase()}]`);
+
+        // 3. TRIGGER PYTHON BOT
+        sendUpdate(`\n[3/4] 🤖 Booting up ${targetEngine.toUpperCase()} Automation Bot...`);
+        
+        const scriptName = targetEngine === "sora" ? "generate_sora.py" : "generate_veo.py";
+        const pyProcess = spawn('python', [path.join(process.cwd(), 'server', scriptName), '--prompt', generatedPrompt]);
+
+        pyProcess.stdout.on('data', (data) => {
+            const lines = data.toString().split('\n');
+            lines.forEach(line => {
+                if(line.trim()) sendUpdate(`   [BOT]: ${line.trim()}`);
+            });
+        });
+
+        pyProcess.stderr.on('data', (data) => {
+            console.error(`[PYTHON ERROR]: ${data}`);
+        });
+
+        pyProcess.on('close', (code) => {
+            if (code !== 0) {
+                sendUpdate(`\n❌ Bot crashed with code ${code}`);
+                return res.end();
+            }
+            sendUpdate(`\n[4/4] 🔥 DONE! AI Video successfully generated and downloaded!`);
+            sendUpdate(`📂 Check your downloads/${targetEngine} folder!\n`);
+            res.end();
+        });
+
+    } catch (err) {
+        sendUpdate(`\n❌ Fatal Pipeline Error: ${err.message}`);
+        res.end();
+    }
 });
 
 app.listen(PORT, () => console.log(`🚀 Server on http://localhost:${PORT}`));
