@@ -34,3 +34,5 @@ ffprobe.exe
 # Downloaded and Generated Videos
 downloads/
 cookies.txt
+server/google_profile
+server/sora_profile

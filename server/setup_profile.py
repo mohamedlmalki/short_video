@@ -32,8 +32,19 @@ async def main():
 
     # 5. Shut down and save
     print("\n✅ Time is up! Saving your session cookies and closing the browser...")
+    
     browser.stop()
+    await asyncio.sleep(1) # <-- ADD THIS: Gives Windows a second to close the pipes cleanly
+    
     print("🔒 Session saved successfully! You are ready for full automation.")
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    # ADD THIS: Suppresses the unavoidable Windows closing errors
+    import sys
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    
+    try:
+        asyncio.run(main())
+    except Exception:
+        pass # Ignore the shutdown noise
