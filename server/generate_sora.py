@@ -138,72 +138,6 @@ async def generate_sora(prompt):
         print(f"   ⚠️ Mode switch error: {e}")
 
     # =========================================================
-    # 🌟 STEP 2.5: FORCE 10 SECOND DURATION
-    # =========================================================
-    print("👉 Checking video duration setting...")
-    try:
-        duration_menu_opened = await page.evaluate("""
-            (() => {
-                const buttons = Array.from(document.querySelectorAll('button'));
-                for (let btn of buttons) {
-                    let text = (btn.innerText || '').trim().toLowerCase();
-                    // If it already says 10s, we are good!
-                    if (text === '10s' || text === '10 seconds') {
-                        return 'already_10s';
-                    }
-                    // If it says 5s, we need to click it to open the menu
-                    if (text === '5s' || text === '5 seconds') {
-                        let rect = btn.getBoundingClientRect();
-                        const opts = { bubbles: true, cancelable: true, view: window, buttons: 1, clientX: rect.left + rect.width/2, clientY: rect.top + rect.height/2 };
-                        btn.dispatchEvent(new PointerEvent('pointerdown', opts));
-                        btn.dispatchEvent(new MouseEvent('mousedown', opts));
-                        btn.dispatchEvent(new PointerEvent('pointerup', opts));
-                        btn.dispatchEvent(new MouseEvent('mouseup', opts));
-                        btn.click();
-                        return 'opened';
-                    }
-                }
-                return 'not_found';
-            })();
-        """)
-
-        if duration_menu_opened == 'already_10s':
-            print("   ✅ Duration is already set to 10 seconds!")
-        elif duration_menu_opened == 'opened':
-            print("   👉 Duration menu opened! Selecting 10s...")
-            await asyncio.sleep(1.5) # Wait for dropdown animation
-            
-            clicked_10s = await page.evaluate("""
-                (() => {
-                    // Check options or standard buttons for "10s"
-                    const items = Array.from(document.querySelectorAll('[role="option"], [role="menuitem"], button'));
-                    for (let item of items) {
-                        let text = (item.innerText || '').trim().toLowerCase();
-                        if (text === '10s' || text === '10 seconds') {
-                            let rect = item.getBoundingClientRect();
-                            const opts = { bubbles: true, cancelable: true, view: window, buttons: 1, clientX: rect.left + rect.width/2, clientY: rect.top + rect.height/2 };
-                            item.dispatchEvent(new PointerEvent('pointerdown', opts));
-                            item.dispatchEvent(new MouseEvent('mousedown', opts));
-                            item.dispatchEvent(new PointerEvent('pointerup', opts));
-                            item.dispatchEvent(new MouseEvent('mouseup', opts));
-                            item.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                })();
-            """)
-            if clicked_10s:
-                print("   ✅ Hardware-Clicked '10s' successfully!")
-            else:
-                print("   ⚠️ Could not find the '10s' option in the menu.")
-            
-            await asyncio.sleep(1)
-            
-    except Exception as e:
-        print(f"   ⚠️ Duration switch error: {e}")
-
-    # =========================================================
     # 🌟 STEP 3: TYPE PROMPT & SUBMIT
     # =========================================================
     print("✍️ Finding the input box...")
@@ -309,6 +243,7 @@ async def generate_sora(prompt):
     # =========================================================
     print(f"\n🎬 Opening dedicated video player...")
     
+    # 🌟 THE FIX: Snapshot the downloads folder BEFORE we trigger the new download!
     existing_local_files = set(os.listdir(downloads_dir))
     
     await page.get(new_video_url)

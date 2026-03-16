@@ -75,52 +75,45 @@ async def generate_video(prompt):
         current_url = await page.evaluate("window.location.href")
         
         if "/project/" not in current_url:
-            print("   👉 We are on the dashboard. Finding the 'New project' button...")
-            clicked = False
+            print("   👉 We are on the dashboard. Attempting to start a New Project...")
             
-            # Method 1: Use nodriver's native button scanner
-            try:
-                buttons = await page.select_all('button')
-                for btn in buttons:
-                    text = (btn.text_all or "").lower()
-                    if "new project" in text:
-                        await btn.click() # Send hardware click
-                        clicked = True
-                        print("   ✅ Hardware-Clicked the 'New project' button! Creating a fresh workspace...")
-                        break
-            except Exception as e:
-                pass
-                
-            # Method 2: Fallback (Inject exact PointerEvents to bypass React's button-overlay)
-            if not clicked:
-                clicked = await page.evaluate("""
-                    (() => {
-                        const buttons = Array.from(document.querySelectorAll('button'));
-                        for (let btn of buttons) {
-                            let text = (btn.innerText || '').toLowerCase();
-                            if (text.includes('new project')) {
-                                let rect = btn.getBoundingClientRect();
-                                if (rect.width > 0 && rect.height > 0) {
-                                    const opts = { bubbles: true, cancelable: true, view: window, buttons: 1, clientX: rect.left + rect.width/2, clientY: rect.top + rect.height/2 };
-                                    btn.dispatchEvent(new PointerEvent('pointerdown', opts));
-                                    btn.dispatchEvent(new MouseEvent('mousedown', opts));
-                                    btn.dispatchEvent(new PointerEvent('pointerup', opts));
-                                    btn.dispatchEvent(new MouseEvent('mouseup', opts));
-                                    btn.click();
-                                    return true;
-                                }
+            # STRATEGY 1: Look for any link/button that mentions 'project' or 'create'
+            clicked = await page.evaluate("""
+                (() => {
+                    const elements = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
+                    for (let el of elements) {
+                        let text = (el.innerText || '').toLowerCase().replace(/\s+/g, ' ');
+                        let ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+                        
+                        if (text.includes('new project') || text.includes('create video') || ariaLabel.includes('new project')) {
+                            let rect = el.getBoundingClientRect();
+                            if (rect.width > 0 && rect.height > 0) {
+                                const opts = { bubbles: true, cancelable: true, view: window, buttons: 1, clientX: rect.left + rect.width/2, clientY: rect.top + rect.height/2 };
+                                el.dispatchEvent(new PointerEvent('pointerdown', opts));
+                                el.dispatchEvent(new MouseEvent('mousedown', opts));
+                                el.dispatchEvent(new PointerEvent('pointerup', opts));
+                                el.dispatchEvent(new MouseEvent('mouseup', opts));
+                                el.click();
+                                return true;
                             }
                         }
-                        return false;
-                    })();
-                """)
-                if clicked:
-                    print("   ✅ JS-Clicked the 'New project' button! Creating a fresh workspace...")
-
+                    }
+                    return false;
+                })();
+            """)
+            
             if clicked:
-                await asyncio.sleep(8) # Wait for the new project workspace UI to load
+                 print("   ✅ JS-Clicked a creation button! Waiting for workspace...")
+                 await asyncio.sleep(8)
             else:
-                print("   ⚠️ Could not click 'New project'. Hoping the UI auto-redirects...")
+                 print("   ⚠️ Could not find a standard creation button. Trying UI fallback...")
+                 # STRATEGY 2: If no explicit button is found, see if we can jump directly to a new project URL
+                 try:
+                     print("   🌐 Attempting direct navigation bypass...")
+                     await page.get("https://labs.google/fx/tools/flow/project/new")
+                     await asyncio.sleep(8)
+                 except:
+                     pass
         else:
             print("   ✅ Google auto-redirected us to an active project workspace.")
             
@@ -132,6 +125,14 @@ async def generate_video(prompt):
     # =========================================================
     print("⏳ Waiting for the AI Editor to fully load...")
     editor_div = None
+    
+    # We must ensure we are on a project page before looking for text boxes
+    current_url = await page.evaluate("window.location.href")
+    if "/project" not in current_url and "/flow" not in current_url:
+         print("❌ CRITICAL: Not on a project page. Navigation failed.")
+         browser.stop()
+         return
+
     for i in range(30): 
         try:
             editor_div = await page.select('[role="textbox"]')
@@ -178,12 +179,25 @@ async def generate_video(prompt):
         await editor_div.send_keys('\n')
         print("✅ Pressed 'Enter' to start generation!")
         await asyncio.sleep(1)
-        buttons = await page.select_all('button')
-        for btn in buttons:
-            text = btn.text_all.lower() if btn.text_all else ""
-            if "create" in text or "generate" in text:
-                await btn.click()
-                break
+        
+        # Click the generate/create button just in case Enter didn't work
+        clicked_gen = await page.evaluate("""
+                (() => {
+                    const buttons = Array.from(document.querySelectorAll('button, div[role="button"]'));
+                    for (let btn of buttons) {
+                        let text = (btn.innerText || '').toLowerCase();
+                        let ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+                        if (text.includes('generate') || text.includes('create') || ariaLabel.includes('generate')) {
+                            btn.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                })();
+            """)
+        if clicked_gen:
+             print("   ✅ Clicked the 'Generate' button as fallback.")
+            
     except Exception as e:
         print(f"❌ Error submitting prompt: {e}")
 
@@ -221,7 +235,7 @@ async def generate_video(prompt):
         return
 
     # =========================================================
-    # 🌟 SECURE BLOB DOWNLOADER (EXACT V1 COPY)
+    # 🌟 SECURE BLOB DOWNLOADER
     # =========================================================
     print("\n📥 Automating Secure Download...")
     existing_local_files = set(os.listdir(downloads_dir))
@@ -339,7 +353,5 @@ if __name__ == '__main__':
     
     try:
         asyncio.run(generate_video(args.prompt))
-    except Exception:
-        pass
-    finally:
-        sys.stderr = open(os.devnull, 'w')
+    except Exception as e:
+        print(f"\n❌ FATAL CRASH: {e}")

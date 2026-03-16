@@ -10,6 +10,7 @@ import ffmpeg from 'fluent-ffmpeg';
 import Groq from 'groq-sdk';
 
 import googleTrends from 'google-trends-api';
+import Parser from 'rss-parser';
 
 dotenv.config();
 
@@ -63,7 +64,7 @@ app.delete('/api/jobs/:id', (req, res) => {
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ==========================================
-// GENERATION ENGINE
+// GENERATION ENGINE (REPURPOSE APP)
 // ==========================================
 app.post('/api/generate', async (req, res) => {
     const { url: videoUrl, mode, chunkDuration, partsCount, customVideoTitle, proSettings } = req.body;
@@ -114,7 +115,6 @@ app.post('/api/generate', async (req, res) => {
         '-o', outputPath, '--force-overwrites',
         '--no-playlist', 
         '--cookies-from-browser', 'firefox', '--js-runtimes', 'node', 
-        // Note: The broken TV client limiter was intentionally removed here to unlock 4K/Maximum Quality
         videoUrl
     ]);
 
@@ -131,7 +131,7 @@ app.post('/api/generate', async (req, res) => {
         let speedMultiplier = 1.0;
         let wantsSubtitles = false;
         let printPartTitle = false;
-        let wantsAutoCut = proSettings?.autoCut ?? true; // ✂️ Auto-Cut Defaults to TRUE
+        let wantsAutoCut = proSettings?.autoCut ?? true; 
         
         let subtitleFont = "Impact";
         let isBold = "1";
@@ -475,7 +475,6 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
                     fs.writeFileSync(metadataPath, `Original Video: ${originalTitle}\nChannel: ${originalChannel}\nTikTok Title: ${title}\nHashtags: ${hashtags}\nClip Duration: ${duration.toFixed(1)} seconds`);
 
                     let shiftedTranscript = [];
-                    // ✂️ Prepare timings if we need Subtitles OR Auto-Cut
                     if (wantsSubtitles || wantsAutoCut) {
                         sendUpdate(`   🔤 Preparing Frame-Locked Audio timings...`);
                         
@@ -596,19 +595,15 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
                             fs.renameSync(baseShortPath, finalVideoPath);
                         }
 
-                        // ==========================================
-                        // ✨ EXTRA: AUTO-CUT SILENCES (JUMP CUTS) ✨
-                        // ==========================================
                         if (wantsAutoCut && shiftedTranscript.length > 0) {
                             sendUpdate(`\n[8/8] ✂️ AUTO-CUT: Scanning for dead air...`);
                             
-                            const SILENCE_GAP = 0.55; // Gap of 0.55s triggers a cut
-                            const PAD_START = 0.1;    // Keep 0.1s before a word starts
-                            const PAD_END = 0.2;      // Keep 0.2s after a word ends
+                            const SILENCE_GAP = 0.55; 
+                            const PAD_START = 0.1;    
+                            const PAD_END = 0.2;      
                             
                             let keepIntervals = [];
                             
-                            // 1. Group words together into "Keep" zones
                             shiftedTranscript.forEach(w => {
                                 let wordStartScaled = w.start / speedMultiplier;
                                 let wordEndScaled = w.end / speedMultiplier;
@@ -621,14 +616,13 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
                                 } else {
                                     let last = keepIntervals[keepIntervals.length - 1];
                                     if (s - last.end < SILENCE_GAP) {
-                                        last.end = Math.max(last.end, e); // Merge close words
+                                        last.end = Math.max(last.end, e);
                                     } else {
-                                        keepIntervals.push({ start: s, end: e }); // New segment
+                                        keepIntervals.push({ start: s, end: e });
                                     }
                                 }
                             });
 
-                            // 2. Instruct FFmpeg to chop out everything not in the "Keep" zones
                             if (keepIntervals.length > 1) {
                                 sendUpdate(`   🔪 Found ${keepIntervals.length - 1} silences! Applying Jump-Cuts...`);
                                 
@@ -692,6 +686,7 @@ OUTPUT ONLY JSON: {"title": "new viral caption here 💀", "hashtags": "#fyp #vi
     });
 });
 
+// ==========================================
 // 🤖 AI TREND STUDIO ENGINE (VEO & SORA)
 // ==========================================
 app.post('/api/generate-ai-video', async (req, res) => {
@@ -715,49 +710,36 @@ app.post('/api/generate-ai-video', async (req, res) => {
     try {
         let finalTopic = topic;
 
-        // 1. FETCH TRENDS IF NEEDED
         if (topic === "Auto-Scrape Viral Trends" || !topic) {
-            sendUpdate(`[1/4] 🌍 Fetching live trends from ${trendSource}...`);
+            sendUpdate(`[1/4] 🌍 Fetching live trends from ${trendSource} using RSS bypass...`);
+            
+            const parser = new Parser({
+                headers: { 
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' 
+                }
+            });
             
             if (trendSource === "reddit") {
-                // ADDED DISGUISE: User-Agent makes Reddit think we are a normal Chrome browser
-                const redditRes = await fetch('https://www.reddit.com/r/popculturechat/top.json?limit=10&t=day', {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-                    }
-                });
-                
-                const rawRedditText = await redditRes.text();
                 try {
-                    const redditData = JSON.parse(rawRedditText);
-                    finalTopic = redditData.data.children.map(c => c.data.title).join('\n');
-                    sendUpdate(`✅ Scraped top daily Reddit posts!`);
+                    const feed = await parser.parseURL('https://www.reddit.com/r/popculturechat/top.rss');
+                    finalTopic = feed.items.slice(0, 10).map(item => item.title).join('\n');
+                    sendUpdate(`✅ Scraped top daily Reddit posts via RSS!`);
                 } catch (e) {
-                    console.log("Reddit Error HTML:", rawRedditText.substring(0, 100));
-                    throw new Error("Reddit blocked the request. Try typing a custom topic!");
+                    throw new Error(`Reddit RSS failed: ${e.message}`);
                 }
             } else {
-                // GOOGLE TRENDS FIX: Safe parsing
                 try {
-                    const trends = await googleTrends.dailyTrends({ geo: 'US' });
-                    const trendsObj = JSON.parse(trends);
-                    
-                    // Dig into Google's specific JSON structure safely
-                    if (trendsObj && trendsObj.default && trendsObj.default.trendingSearchesDays) {
-                        finalTopic = trendsObj.default.trendingSearchesDays[0].trendingSearches.map(s => s.title.query).join(', ');
-                        sendUpdate(`✅ Scraped top Google searches!`);
-                    } else {
-                        throw new Error("Google returned empty trend data.");
-                    }
+                    const feed = await parser.parseURL('https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en');
+                    finalTopic = feed.items.slice(0, 10).map(item => item.title).join(', ');
+                    sendUpdate(`✅ Scraped top Google News headlines via RSS!`);
                 } catch (e) {
-                    throw new Error("Google Trends threw a CAPTCHA block. Please switch to Reddit or type a custom topic!");
+                    throw new Error(`Google RSS failed: ${e.message}`);
                 }
             }
         } else {
             sendUpdate(`[1/4] 🎯 Using custom topic: "${topic}"`);
         }
 
-        // 2. GROQ PROMPT ENGINEERING & ROUTING
         sendUpdate(`\n[2/4] 🧠 Groq Llama-3.3-70B is writing the cinematic prompt...`);
         const aiPrompt = `You are an elite AI video director. 
         Read these trending topics/inputs: "${finalTopic}"
@@ -777,32 +759,48 @@ app.post('/api/generate-ai-video', async (req, res) => {
         const aiResult = JSON.parse(promptGen.choices[0].message.content);
         const generatedPrompt = aiResult.prompt;
         
-        // If the user picked "auto", let the AI decide. Otherwise, force the user's choice.
-        const targetEngine = engine === "auto" ? aiResult.engine : engine;
+        const targetEngine = (engine === "auto" ? aiResult.engine : engine).toLowerCase();
 
         sendUpdate(`✅ Prompt Written: "${generatedPrompt}"`);
         sendUpdate(`✅ AI Routed to Engine: [${targetEngine.toUpperCase()}]`);
 
-        // 3. TRIGGER PYTHON BOT
+        // ====================================================
+        // 🌟 THE ULTIMATE FIX: ENVIRONMENT VARIABLE BRIDGE 🌟
+        // ====================================================
         sendUpdate(`\n[3/4] 🤖 Booting up ${targetEngine.toUpperCase()} Automation Bot...`);
         
         const scriptName = targetEngine === "sora" ? "generate_sora.py" : "generate_veo.py";
-        const pyProcess = spawn('python', [path.join(process.cwd(), 'server', scriptName), '--prompt', generatedPrompt]);
+        const scriptPath = path.join(process.cwd(), 'server', scriptName);
+        
+        // Inject the prompt natively through an Environment Variable to bypass ALL Windows CMD quoting bugs
+        const processEnv = { ...process.env, AI_PROMPT: generatedPrompt, PYTHONIOENCODING: 'utf-8' };
+
+        // We use 'python' with shell: true so pyenv loads perfectly without needing exact .exe paths
+        const pyProcess = spawn('python', ['-u', scriptPath], { 
+            shell: true,
+            env: processEnv 
+        });
+
+        pyProcess.on('error', (err) => {
+            console.error(`[SPAWN ERROR]:`, err);
+            sendUpdate(`   ❌ ERROR: Failed to start Python executable: ${err.message}`);
+        });
 
         pyProcess.stdout.on('data', (data) => {
-            const lines = data.toString().split('\n');
-            lines.forEach(line => {
+            data.toString().split('\n').forEach(line => {
                 if(line.trim()) sendUpdate(`   [BOT]: ${line.trim()}`);
             });
         });
 
         pyProcess.stderr.on('data', (data) => {
-            console.error(`[PYTHON ERROR]: ${data}`);
+            data.toString().split('\n').forEach(line => {
+                if(line.trim()) sendUpdate(`   [ERROR]: ${line.trim()}`);
+            });
         });
 
         pyProcess.on('close', (code) => {
             if (code !== 0) {
-                sendUpdate(`\n❌ Bot crashed with code ${code}`);
+                sendUpdate(`\n❌ Bot crashed or failed to start (Exit Code ${code}).`);
                 return res.end();
             }
             sendUpdate(`\n[4/4] 🔥 DONE! AI Video successfully generated and downloaded!`);
