@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev:frontend": "vite",
-    "dev:backend": "nodemon --ignore downloads/ --ignore jobs.json server/index.js",
+    "dev:backend": "nodemon --ignore downloads/ --ignore 'server/*_profile/' server/index.js",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "build": "tsc -b && vite build",
     "lint": "eslint .",

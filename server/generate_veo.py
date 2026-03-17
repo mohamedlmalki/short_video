@@ -69,23 +69,32 @@ async def generate_video(prompt):
     page = await browser.get(base_url)
 
     print("⏳ Checking dashboard status...")
-    await asyncio.sleep(6) # Give the dashboard time to render
+    await asyncio.sleep(8) # Wait slightly longer for Google's UI to load
 
     try:
         current_url = await page.evaluate("window.location.href")
         
         if "/project/" not in current_url:
-            print("   👉 We are on the dashboard. Attempting to start a New Project...")
+            print("   👉 We are on the dashboard. Hunting for the 'Create' button...")
             
-            # STRATEGY 1: Look for any link/button that mentions 'project' or 'create'
+            # 🌟 STRATEGY 1: Aggressive AI UI Clicker
             clicked = await page.evaluate("""
                 (() => {
                     const elements = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
                     for (let el of elements) {
-                        let text = (el.innerText || '').toLowerCase().replace(/\s+/g, ' ');
+                        let text = (el.innerText || '').toLowerCase().replace(/\\s+/g, ' ');
                         let ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
                         
-                        if (text.includes('new project') || text.includes('create video') || ariaLabel.includes('new project')) {
+                        // Expanded keywords to catch any Google UI updates
+                        if (
+                            text === 'create' || 
+                            text === 'new' || 
+                            text.includes('new project') || 
+                            text.includes('create video') || 
+                            text.includes('blank project') ||
+                            ariaLabel.includes('new project') ||
+                            ariaLabel.includes('create')
+                        ) {
                             let rect = el.getBoundingClientRect();
                             if (rect.width > 0 && rect.height > 0) {
                                 const opts = { bubbles: true, cancelable: true, view: window, buttons: 1, clientX: rect.left + rect.width/2, clientY: rect.top + rect.height/2 };
@@ -103,17 +112,13 @@ async def generate_video(prompt):
             """)
             
             if clicked:
-                 print("   ✅ JS-Clicked a creation button! Waiting for workspace...")
-                 await asyncio.sleep(8)
+                 print("   ✅ Found and clicked the Creation button! Waiting for workspace...")
+                 await asyncio.sleep(10)
             else:
-                 print("   ⚠️ Could not find a standard creation button. Trying UI fallback...")
-                 # STRATEGY 2: If no explicit button is found, see if we can jump directly to a new project URL
-                 try:
-                     print("   🌐 Attempting direct navigation bypass...")
-                     await page.get("https://labs.google/fx/tools/flow/project/new")
-                     await asyncio.sleep(8)
-                 except:
-                     pass
+                 print("   ❌ CRITICAL: Could not find the 'Create' button on the dashboard.")
+                 print("   ⚠️ Google might have changed their UI. Stopping to prevent dead-end errors.")
+                 browser.stop()
+                 return
         else:
             print("   ✅ Google auto-redirected us to an active project workspace.")
             
@@ -347,11 +352,24 @@ if __name__ == '__main__':
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--prompt', type=str, required=True, help="The video prompt to send to Veo")
-    args = parser.parse_args()
+    # --- 🌟 FRONTEND FIX 1: THE ENVIRONMENT VARIABLE BRIDGE 🌟 ---
+    prompt = os.environ.get("AI_PROMPT")
+
+    if not prompt:
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--prompt', type=str, help="The video prompt to send to Veo")
+        args = parser.parse_args()
+        prompt = args.prompt
     
-    try:
-        asyncio.run(generate_video(args.prompt))
-    except Exception as e:
-        print(f"\n❌ FATAL CRASH: {e}")
+    if prompt:
+        try:
+            asyncio.run(generate_video(prompt))
+        except Exception as e:
+            print(f"\n❌ FATAL CRASH: {e}")
+        finally:
+            sys.stderr = open(os.devnull, 'w')
+            # --- 🌟 FRONTEND FIX 2: THE QUIET EXIT 🌟 ---
+            os._exit(0)
+    else:
+        print("\n❌ ERROR: No prompt provided. Set AI_PROMPT env variable or use --prompt.")
+        sys.exit(1)

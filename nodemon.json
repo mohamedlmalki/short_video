@@ -1,0 +1,15 @@
+{
+  "verbose": true,
+  "ignore": [
+    "downloads/*",
+    "server/sora_profile/*",
+    "server/veo_profile/*",
+    "server/*.pyc",
+    "server/__pycache__/*",
+    "jobs.json",
+    "*.mp4",
+    "*.crdownload"
+  ],
+  "watch": ["server/index.js"],
+  "ext": "js,json"
+}

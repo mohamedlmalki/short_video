@@ -239,45 +239,72 @@ async def generate_sora(prompt):
         return
 
     # =========================================================
-    # 🌟 STEP 5: OPEN VIDEO & START ASYNC DOWNLOAD
+    # 🌟 STEP 5: SMART WAIT FOR FULL GENERATION (UP TO 10 MIN)
     # =========================================================
     print(f"\n🎬 Opening dedicated video player...")
     
-    # 🌟 THE FIX: Snapshot the downloads folder BEFORE we trigger the new download!
     existing_local_files = set(os.listdir(downloads_dir))
     
     await page.get(new_video_url)
     await asyncio.sleep(5)
 
-    print("⏳ Waiting for Sora to finish rendering... (Will wait up to 10 minutes)")
-    
+    print("\n=======================================================")
+    print("🧠 INITIATING SMART WAIT FOR SORA RENDERING")
+    print("⏳ Will check every 5s for up to 10 minutes...")
+    print("=======================================================")
+
     success = False
+    
+    # 120 iterations * 5 seconds = 600 seconds = 10 minutes maximum wait
     for i in range(120): 
-        if i % 12 == 0 and i > 0:
-            print(f"   ... still waiting ({i * 5} seconds elapsed)")
+        if i % 6 == 0 and i > 0:
+            print(f"   ... still checking ({i * 5} seconds elapsed)")
             
         try:
             fetched = await page.evaluate("""
                 (() => {
-                    // Prevent duplicate downloads!
                     if (window.botDownloadTriggered) return true;
 
-                    const videos = document.querySelectorAll('video');
+                    // 1. SMART CHECK: Does the page still say "Generating..." or "Queued"?
+                    const pageText = document.body.innerText.toLowerCase();
+                    if (pageText.includes('generating') || pageText.includes('queued') || pageText.includes('creating')) {
+                        return false; // Still generating, skip this check
+                    }
+
+                    const videos = Array.from(document.querySelectorAll('video'));
                     if(videos.length === 0) return false;
                     
-                    let activeVideo = videos[0];
+                    let validVideos = videos.filter(v => {
+                        let rect = v.getBoundingClientRect();
+                        return rect.width > 200 && rect.height > 200;
+                    });
                     
-                    // Basic sanity check to ignore tiny invisible tracker UI elements
-                    let rect = activeVideo.getBoundingClientRect();
-                    if (rect.width * rect.height < 5000) return false;
+                    if (validVideos.length === 0) return false;
+
+                    // Spatial sorting to find the Top-Left video
+                    validVideos.sort((a, b) => {
+                        let rectA = a.getBoundingClientRect();
+                        let rectB = b.getBoundingClientRect();
+                        if (Math.abs(rectA.top - rectB.top) > 50) return rectA.top - rectB.top;
+                        return rectA.left - rectB.left;
+                    });
                     
+                    let activeVideo = validVideos[0];
+                    
+                    // 2. SMART CHECK: Make sure it's not a placeholder video!
+                    if (!activeVideo.duration || activeVideo.duration < 3) {
+                        return false; 
+                    }
+
+                    // 3. SMART CHECK: Make sure the video is fully loaded
+                    if (activeVideo.readyState < 3) return false;
+
                     const videoSrc = activeVideo.src || (activeVideo.querySelector('source') ? activeVideo.querySelector('source').src : null);
                     if (!videoSrc || videoSrc.trim() === '') return false;
 
-                    // Tag the window so it doesn't trigger again
+                    // THE VIDEO IS READY! Trigger the download!
                     window.botDownloadTriggered = true;
 
-                    // FIRE AND FORGET: Fetch in the background so Python doesn't time out
                     fetch(videoSrc)
                         .then(response => response.blob())
                         .then(blob => {
@@ -299,7 +326,7 @@ async def generate_sora(prompt):
             
             if fetched:
                 success = True
-                print("\n   ✅ Background download triggered successfully!")
+                print(f"\n   ✅ Generation complete at {i * 5} seconds! Download triggered!")
                 break
         except Exception:
             pass
@@ -313,7 +340,6 @@ async def generate_sora(prompt):
         print(f"      [System] Waiting for Chrome to finish saving the file to {downloads_dir}...")
         download_success = False
         
-        # Give it up to 3 minutes to safely save the large video file
         for _ in range(180): 
             await asyncio.sleep(1)
             current_local_files = set(os.listdir(downloads_dir))
@@ -341,7 +367,7 @@ async def generate_sora(prompt):
         if not download_success:
              print(f"   ❌ Download timed out. Check your downloads folder manually!")
     else:
-        print("\n❌ Could not fetch the video blob. It might still be generating or the UI changed.")
+        print("\n❌ Timed out waiting for generation to finish after 10 minutes. Did Sora get stuck?")
 
     print("\n=================================================")
     print("🛑 ALL DONE. SCRIPT COMPLETE.")
@@ -354,13 +380,24 @@ if __name__ == '__main__':
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--prompt', type=str, required=True, help="The video prompt to send to Sora")
-    args = parser.parse_args()
+    # --- 🌟 FRONTEND FIX 1: THE ENVIRONMENT VARIABLE BRIDGE 🌟 ---
+    prompt = os.environ.get("AI_PROMPT")
+
+    if not prompt:
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--prompt', type=str, help="The video prompt to send to Sora")
+        args = parser.parse_args()
+        prompt = args.prompt
     
-    try:
-        asyncio.run(generate_sora(args.prompt))
-    except Exception as e:
-        print(f"\n❌ FATAL CRASH: {e}")
-    finally:
-        sys.stderr = open(os.devnull, 'w')
+    if prompt:
+        try:
+            asyncio.run(generate_sora(prompt))
+        except Exception as e:
+            print(f"\n❌ FATAL CRASH: {e}")
+        finally:
+            sys.stderr = open(os.devnull, 'w')
+            # --- 🌟 FRONTEND FIX 2: THE QUIET EXIT 🌟 ---
+            os._exit(0)
+    else:
+        print("\n❌ ERROR: No prompt provided. Set AI_PROMPT env variable or use --prompt.")
+        sys.exit(1)
